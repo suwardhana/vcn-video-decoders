@@ -22,8 +22,9 @@ hdiutil create -quiet -srcfolder "$WORK/stage" -volname "$NAME" -fs HFS+ -format
 DEV=$(hdiutil attach -readwrite -noverify -noautoopen "$RW" | awk '/Apple_HFS/{print $1; exit}')
 [[ -n "$DEV" ]] || { echo "could not mount the image"; exit 1; }
 
-# Window layout through Finder. Cosmetic: the DMG still works if Automation is not allowed.
-osascript <<OSA || echo "WARNING: Finder layout skipped (allow Automation for Finder to get the styled window)"
+# Window layout through Finder. Skip it on CI: Finder Automation can keep the image busy.
+if [[ ${CI:-} != true ]]; then
+  osascript <<OSA || echo "WARNING: Finder layout skipped (allow Automation for Finder to get the styled window)"
 tell application "Finder"
   tell disk "$NAME"
     open
@@ -44,6 +45,7 @@ tell application "Finder"
   end tell
 end tell
 OSA
+fi
 sync
 hdiutil detach -quiet "$DEV"
 rm -f "$OUT"
