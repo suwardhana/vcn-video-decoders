@@ -1,0 +1,207 @@
+// Decodes a VP9 file on the VCN and prints the I420 MD5 of every shown frame, optionally comparing it with
+// an FFmpeg FATE reference (tests/ref/fate/vp9-*).
+// usage: decode_vp9 file [reference] [-v] [-n frames] [-b] [-png dir every]
+//   -b    benchmark: reads no pixels, prints decode speed and the process footprint
+//   -png  writes every Nth shown frame as a half size PNG, for files that have no reference
+#include <CommonCrypto/CommonDigest.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
+#include <IOSurface/IOSurfaceRef.h>
+#include <ImageIO/ImageIO.h>
+#include <mach/mach.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include "container.h"
+#include "vcnvp9.h"
+
+typedef struct {
+  int frames, mismatches, refs_left, png_every;
+  bool bench;
+  const char *png_dir;
+  FILE *ref;
+} Ctx;
+
+static double now_ms(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6; }
+
+static double footprint_mb(void) {
+  task_vm_info_data_t info;
+  mach_msg_type_number_t n = TASK_VM_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &n) != KERN_SUCCESS) return -1;
+  return info.phys_footprint / 1048576.0;
+}
+
+static int cmp_float(const void *a, const void *b) {
+  float x = *(const float *)a, y = *(const float *)b;
+  return x < y ? -1 : x > y;
+}
+
+static bool next_ref(Ctx *c, char out[33]) {
+  char line[512];
+  while (c->ref && fgets(line, sizeof(line), c->ref)) {
+    if (line[0] == '#') continue;
+    char *h = strrchr(line, ',');
+    if (!h) continue;
+    return sscanf(h + 1, " %32s", out) == 1;
+  }
+  return false;
+}
+
+// Half size, nearest neighbour, BT.709 limited range. Good enough to see corruption by eye.
+static void write_png(const char *dir, int number, IOSurfaceRef s, uint32_t w, uint32_t h) {
+  bool ten = IOSurfaceGetPixelFormat(s) == 'x420';
+  uint8_t *y = IOSurfaceGetBaseAddressOfPlane(s, 0), *uv = IOSurfaceGetBaseAddressOfPlane(s, 1);
+  size_t ys = IOSurfaceGetBytesPerRowOfPlane(s, 0), uvs = IOSurfaceGetBytesPerRowOfPlane(s, 1);
+  uint32_t ow = w / 2, oh = h / 2;
+  uint8_t *rgb = malloc((size_t)ow * oh * 4);
+  for (uint32_t r = 0; r < oh; r++)
+    for (uint32_t i = 0; i < ow; i++) {
+      int Y, U, V;
+      if (ten) {
+        const uint16_t *uvp = (const uint16_t *)(uv + r * uvs) + 2 * i;
+        Y = ((const uint16_t *)(y + 2 * r * ys))[2 * i] >> 8;
+        U = uvp[0] >> 8;
+        V = uvp[1] >> 8;
+      } else {
+        const uint8_t *uvp = uv + r * uvs + 2 * i;
+        Y = y[2 * r * ys + 2 * i];
+        U = uvp[0];
+        V = uvp[1];
+      }
+      float yy = 1.164f * (Y - 16), u = U - 128, v = V - 128;
+      float rr = yy + 1.793f * v, gg = yy - 0.213f * u - 0.533f * v, bb = yy + 2.112f * u;
+      uint8_t *o = rgb + ((size_t)r * ow + i) * 4;
+      o[0] = rr < 0 ? 0 : rr > 255 ? 255 : (uint8_t)rr;
+      o[1] = gg < 0 ? 0 : gg > 255 ? 255 : (uint8_t)gg;
+      o[2] = bb < 0 ? 0 : bb > 255 ? 255 : (uint8_t)bb;
+      o[3] = 255;
+    }
+  char path[1024];
+  snprintf(path, sizeof(path), "%s/frame%06d.png", dir, number);
+  CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+  CGContextRef cg = CGBitmapContextCreate(rgb, ow, oh, 8, (size_t)ow * 4, cs, kCGImageAlphaNoneSkipLast);
+  CGImageRef img = CGBitmapContextCreateImage(cg);
+  CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)path, (CFIndex)strlen(path), false);
+  CGImageDestinationRef dst = CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, NULL);
+  if (dst) {
+    CGImageDestinationAddImage(dst, img, NULL);
+    CGImageDestinationFinalize(dst);
+    CFRelease(dst);
+  }
+  CFRelease(url);
+  CGImageRelease(img);
+  CGContextRelease(cg);
+  CGColorSpaceRelease(cs);
+  free(rgb);
+}
+
+static void on_output(void *vctx, CVPixelBufferRef pb, const VP9Parser *p, uint32_t w, uint32_t h, int64_t tag) {
+  (void)p; (void)tag;
+  Ctx *c = vctx;
+  IOSurfaceRef s = CVPixelBufferGetIOSurface(pb);
+  if (c->bench) { c->frames++; return; }
+  IOSurfaceLock(s, kIOSurfaceLockReadOnly, NULL);
+  if (c->png_dir) {
+    if (c->frames % c->png_every == 0) write_png(c->png_dir, c->frames + 1, s, w, h);
+    IOSurfaceUnlock(s, kIOSurfaceLockReadOnly, NULL);
+    c->frames++;
+    return;
+  }
+  bool ten = IOSurfaceGetPixelFormat(s) == 'x420';
+  uint8_t *y = IOSurfaceGetBaseAddressOfPlane(s, 0), *uv = IOSurfaceGetBaseAddressOfPlane(s, 1);
+  size_t ys = IOSurfaceGetBytesPerRowOfPlane(s, 0), uvs = IOSurfaceGetBytesPerRowOfPlane(s, 1);
+  CC_MD5_CTX m;
+  CC_MD5_Init(&m);
+  uint32_t cw = (w + 1) / 2, ch = (h + 1) / 2;
+  uint8_t *row = malloc((size_t)w * 2 + 16);
+  for (uint32_t r = 0; r < h; r++) {
+    if (ten) {
+      uint16_t *src = (uint16_t *)(y + r * ys), *dst = (uint16_t *)row;
+      for (uint32_t i = 0; i < w; i++) dst[i] = src[i] >> 6;
+      CC_MD5_Update(&m, row, w * 2);
+    } else {
+      CC_MD5_Update(&m, y + r * ys, w);
+    }
+  }
+  for (int pl = 0; pl < 2; pl++)
+    for (uint32_t r = 0; r < ch; r++) {
+      if (ten) {
+        uint16_t *src = (uint16_t *)(uv + r * uvs), *dst = (uint16_t *)row;
+        for (uint32_t i = 0; i < cw; i++) dst[i] = src[2 * i + pl] >> 6;
+        CC_MD5_Update(&m, row, cw * 2);
+      } else {
+        for (uint32_t i = 0; i < cw; i++) row[i] = uv[r * uvs + 2 * i + pl];
+        CC_MD5_Update(&m, row, cw);
+      }
+    }
+  free(row);
+  IOSurfaceUnlock(s, kIOSurfaceLockReadOnly, NULL);
+  uint8_t dg[16];
+  CC_MD5_Final(dg, &m);
+  char hex[33], expect[33] = "";
+  for (int i = 0; i < 16; i++) sprintf(hex + 2 * i, "%02x", dg[i]);
+  c->frames++;
+  bool have = next_ref(c, expect), ok = !have || !strcmp(expect, hex);
+  if (!ok) c->mismatches++;
+  printf("frame %3d %ux%u %s%s%s\n", c->frames, w, h, hex, have ? (ok ? "  OK" : "  MISMATCH expected ") : "", ok ? "" : expect);
+}
+
+int main(int argc, char **argv) {
+  const char *path = NULL, *ref = NULL;
+  int limit = 0;
+  Ctx c = {0};
+  for (int i = 1; i < argc; i++) {
+    if (!strcmp(argv[i], "-v")) vcnvp9_debug = 1;
+    else if (!strcmp(argv[i], "-b")) c.bench = true;
+    else if (!strcmp(argv[i], "-n") && i + 1 < argc) limit = atoi(argv[++i]);
+    else if (!strcmp(argv[i], "-png") && i + 2 < argc) { c.png_dir = argv[++i]; c.png_every = atoi(argv[++i]); }
+    else if (!path) path = argv[i];
+    else ref = argv[i];
+  }
+  if (!path || (c.png_dir && c.png_every < 1)) {
+    fprintf(stderr, "usage: decode_vp9 file [reference] [-v] [-n frames] [-b] [-png dir every]\n");
+    return 1;
+  }
+  Container f;
+  if (!container_open(&f, path)) { perror(path); return 1; }
+  char err[256];
+  double start_fp = footprint_mb();
+  VcnVP9 *d = vcnvp9_create(4096, 2304, err, sizeof(err));
+  if (!d) { fprintf(stderr, "create: %s\n", err); return 1; }
+  if (ref) c.ref = fopen(ref, "r");
+  const uint8_t *data;
+  size_t size;
+  int n = 0, rc = 0, cap = 0, gt_budget = 0;
+  float *times = NULL;
+  double t0 = now_ms(), first_fp = 0, last_print = t0;
+  while ((!limit || n < limit) && container_next(&f, &data, &size)) {
+    double a = now_ms();
+    rc = vcnvp9_decode(d, data, size, n++, on_output, &c);
+    if (rc) { fprintf(stderr, "decode error at chunk %d: %s\n", n - 1, vcnvp9_last_error(d)); break; }
+    if (c.bench) {
+      double b = now_ms();
+      if (n > cap) { cap = cap ? cap * 2 : 4096; times = realloc(times, (size_t)cap * sizeof(*times)); }
+      times[n - 1] = (float)(b - a);
+      if (b - a > 1000.0 / 60) gt_budget++;
+      if (n == 100) first_fp = footprint_mb();
+      if (b - last_print > 10000) {
+        last_print = b;
+        printf("  chunk %d: %.1f chunks/s, footprint %.0f MB\n", n, n * 1000.0 / (b - t0), footprint_mb());
+        fflush(stdout);
+      }
+    }
+  }
+  double total = now_ms() - t0;
+  if (c.bench && n) {
+    qsort(times, (size_t)n, sizeof(*times), cmp_float);
+    printf("bench: %d chunks, %d shown, %.2f s, %.1f shown frames/s\n", n, c.frames, total / 1000, c.frames * 1000.0 / total);
+    printf("chunk ms: p50 %.2f p95 %.2f p99 %.2f max %.2f, over 16.67 ms: %d\n", times[n / 2], times[n * 95 / 100], times[n * 99 / 100], times[n - 1], gt_budget);
+    printf("footprint MB: before create %.0f, chunk 100 %.0f, end %.0f\n", start_fp, first_fp, footprint_mb());
+  }
+  free(times);
+  printf("%s: %d frames, %d mismatches\n", path, c.frames, c.mismatches);
+  vcnvp9_destroy(d);
+  container_close(&f);
+  return rc ? 1 : c.mismatches ? 2 : 0;
+}

@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>vp9 test</title>
+<style>
+  body { background:#111; color:#eee; font:22px/1.35 Menlo, monospace; margin:16px; }
+  video { width:640px; display:block; margin:8px 0; background:#000; }
+  td { padding:0 18px 0 0; }
+</style>
+<pre id="status" style="color:#7f7">...</pre>
+<video id="v" muted autoplay playsinline></video>
+<table id="out"></table>
+<script>
+const q = new URLSearchParams(location.search);
+const src = q.get("src") || "../.re/vp9/4k/bbb-2160p-vp9-head.webm";
+const v = document.getElementById("v"), out = document.getElementById("out"), st = document.getElementById("status");
+function log(k, val) {
+  const r = out.insertRow();
+  r.insertCell().textContent = k;
+  r.insertCell().textContent = val;
+}
+async function caps(type, contentType, width, height, framerate, bitrate) {
+  try {
+    const i = await navigator.mediaCapabilities.decodingInfo({ type, video: { contentType, width, height, framerate, bitrate } });
+    return `${i.supported ? "supported" : "NO"} ${i.smooth ? "smooth" : "not-smooth"} ${i.powerEfficient ? "efficient" : "not-efficient"}`;
+  } catch (e) { return "error " + e.message; }
+}
+(async () => {
+  log("UA", navigator.userAgent.replace(/^.*\) /, ""));
+  for (const c of ['video/webm; codecs="vp09.00.51.08"', 'video/webm; codecs="vp09.02.51.10"', 'video/mp4; codecs="vp09.00.51.08"'])
+    log("MSE " + c.replace("video/", ""), String(window.MediaSource && MediaSource.isTypeSupported(c)));
+  log("canPlayType webm vp9", v.canPlayType('video/webm; codecs="vp09.00.51.08"'));
+  log("caps MSE vp9 4K60", await caps("media-source", 'video/webm; codecs="vp09.00.51.08"', 3840, 2160, 60, 20000000));
+  log("caps MSE vp9 4K60 10bit", await caps("media-source", 'video/webm; codecs="vp09.02.51.10"', 3840, 2160, 60, 25000000));
+  log("caps file vp9 4K60", await caps("file", 'video/webm; codecs="vp09.00.51.08"', 3840, 2160, 60, 20000000));
+  v.onerror = () => { st.style.color = "#f77"; st.textContent = "ERROR " + (v.error && (v.error.code + " " + v.error.message)); };
+  v.src = src;
+  setInterval(() => {
+    if (v.error) return;
+    const p = v.getVideoPlaybackQuality();
+    st.textContent = `${v.videoWidth}x${v.videoHeight} t=${v.currentTime.toFixed(1)}s ready=${v.readyState} paused=${v.paused}\n` +
+                     `decoded=${p.totalVideoFrames} dropped=${p.droppedVideoFrames}`;
+  }, 500);
+})();
+</script>

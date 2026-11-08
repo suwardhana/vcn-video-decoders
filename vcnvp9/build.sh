@@ -1,0 +1,9 @@
+#!/bin/sh
+# Builds the VP9 test tools. Nothing here is installed, and decode_vp9 refuses to touch the GPU on its own.
+set -e
+cd "$(dirname "$0")"
+CFLAGS="-O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -Wno-deprecated-declarations -std=c11 -D_DARWIN_C_SOURCE -arch x86_64"
+clang $CFLAGS vp9parse.c vp9dump.c -o vp9dump
+clang $CFLAGS vp9parse.c vcnvp9.c decode_vp9.c -o decode_vp9 \
+  -framework CoreFoundation -framework CoreGraphics -framework CoreVideo -framework ImageIO -framework IOKit -framework IOSurface
+echo built

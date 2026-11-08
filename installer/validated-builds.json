@@ -1,0 +1,12 @@
+{
+  "_comment": "macOS builds whose AMDRadeonVADriver2 AV1/VP9 VCN layout has been validated in IDA and run bit-exact. Installing on an UNLISTED build is blocked by default (GPU-hang risk) and needs the explicit override in the app. Add a build here only after validating its driver in IDA.",
+  "schema": 1,
+  "validated": [
+    { "build": "24H232", "product": "15.8.2", "name": "Sequoia 15.8.2", "driverUUID": "5D90FED3BCBF34759F4B8FC00026D3AB", "av1": true, "vp9": "untested-on-gpu" },
+    { "build": "25G241", "product": "26.7.1", "name": "Tahoe 26.7.1",   "driverUUID": "8D3BA61E7BC73BDFADB3A7866360B6DE", "av1": true, "vp9": true },
+    { "build": "25G332", "product": "26.7.2", "name": "Tahoe 26.7.2",   "driverUUID": "1181E2CA31B33DF090E23AE70552D753", "av1": true, "vp9": "untested-on-gpu" }
+  ],
+  "supportedGPUs": [
+    "Radeon RX 6800", "Radeon RX 6800 XT", "Radeon RX 6900 XT", "Radeon RX 6950 XT"
+  ]
+}

@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Local analysis tooling
+.codegraph/
+graphify-out/
+bin/
+
+# Build products
+build/
+*.o
+*.a
+*.dylib
+*.dSYM/
+*.app/
+*.dmg
+
+# Reverse-engineering and local test material
+.re/
+*.bin
+*.ivf
+*.webm
+*.md5
+
+# Editors
+.vscode/
+.idea/
