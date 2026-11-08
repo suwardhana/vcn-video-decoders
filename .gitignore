@@ -14,6 +14,7 @@ build/
 *.dSYM/
 *.app/
 *.dmg
+/vtvp9/vtvp9test
 
 # Reverse-engineering and local test material
 .re/

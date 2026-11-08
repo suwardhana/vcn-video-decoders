@@ -1,0 +1,96 @@
+name: Build and release DMG
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set version from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [[ -z "$version" ]]; then
+            echo "The tag must start with v" >&2
+            exit 1
+          fi
+          /usr/bin/plutil -replace CFBundleShortVersionString \
+            -string "$version" installer/app/Info.plist
+          echo "Building version $version"
+
+      - name: Build AV1 decoder
+        run: ./vtav1/build.sh
+
+      - name: Build VP9 decoder
+        run: ./vtvp9/build.sh
+
+      - name: Build installer app
+        run: ./installer/build-app.sh
+
+      - name: Verify application
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="installer/build/AMD VCN Video Decoders.app"
+          test -d "$app"
+          file "$app/Contents/Resources/AV1VCNDecoder.bundle/Contents/MacOS/AV1VCNDecoder" | grep -q x86_64
+          file "$app/Contents/Resources/VP9VCNDecoder.bundle/Contents/MacOS/VP9VCNDecoder" | grep -q x86_64
+          file "$app/Contents/MacOS/VCNInstaller" | grep -q x86_64
+          codesign --verify --deep --strict "$app"
+
+      - name: Package DMG and checksum
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./installer/make-dmg.sh
+          dmgs=(installer/build/AMD-VCN-Video-Decoders-*.dmg)
+          if [[ ${#dmgs[@]} -ne 1 || ! -f "${dmgs[0]}" ]]; then
+            echo "Expected exactly one DMG" >&2
+            exit 1
+          fi
+          dmg="${dmgs[0]}"
+          directory="$(dirname "$dmg")"
+          filename="$(basename "$dmg")"
+          (cd "$directory" && shasum -a 256 "$filename" > "$filename.sha256")
+          echo "dmg=$dmg" >> "$GITHUB_OUTPUT"
+          echo "checksum=$dmg.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          DMG: ${{ steps.package.outputs.dmg }}
+          CHECKSUM: ${{ steps.package.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$DMG" "$CHECKSUM" \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            args=(
+              --repo "$GITHUB_REPOSITORY"
+              --title "AMD VCN Video Decoders $TAG"
+              --generate-notes
+              --verify-tag
+            )
+            if [[ "$TAG" == *-* ]]; then
+              args+=(--prerelease)
+            fi
+            gh release create "$TAG" "$DMG" "$CHECKSUM" "${args[@]}"
+          fi
