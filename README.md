@@ -5,6 +5,9 @@ Hardware AV1 and VP9 decoding through VideoToolbox on AMD Navi 21 GPUs (RX 6800,
 
 Made by [DrogaBox](https://github.com/DrogaBox) & [Izzy](https://github.com/wh0ami7).
 
+<img width="1900" height="859" alt="image" src="https://github.com/user-attachments/assets/a58ecd9d-c990-4707-aea9-8a3f5d1fe01e" />
+
+
 ## How it works
 
 macOS ships AMD's VCN driver (`AMDRadeonVADriver2`), but only wires H.264 and HEVC to VideoToolbox.
