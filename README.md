@@ -1,4 +1,4 @@
-# AMD VCN Video Decoders: source
+# AMD VCN Video Decoders
 
 Hardware AV1 and VP9 decoding through VideoToolbox on AMD Navi 21 GPUs (RX 6800, 6800 XT, 6900 XT,
 6950 XT) on OpenCore hackintoshes. Safari and Chrome then decode YouTube AV1 and VP9 on the GPU.
