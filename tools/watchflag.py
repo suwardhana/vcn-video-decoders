@@ -1,34 +1,70 @@
-# lldb: find who writes CoreMedia`sDisableRegistryCodesignValidation.
-#   lldb --batch -o "command script import watchflag.py" -o "watchflag <exe> <args...>"
+"""Watch writes to CoreMedia sDisableRegistryCodesignValidation.
+
+Usage:
+  lldb --batch -o "command script import watchflag.py" -o "watchflag <exe> <args...>"
+"""
+
+from __future__ import annotations
+
 import lldb
 
-def watchflag(debugger, command, result, d):
+
+def watchflag(
+    debugger: lldb.SBDebugger,
+    command: str,
+    result: object,
+    unused_dict: dict,
+) -> None:
+    """Install a watchpoint on sDisableRegistryCodesignValidation.
+
+    Args:
+      debugger: Active lldb debugger.
+      command: Remaining command-line arguments.
+      result: lldb command result object.
+      unused_dict: Extra session dict from lldb.
+    """
+    del result, unused_dict  # Unused.
     args = command.split()
-    t = debugger.CreateTarget(args[0])
-    t.BreakpointCreateByName("VTCopyVideoDecoderList")
+    target = debugger.CreateTarget(args[0])
+    target.BreakpointCreateByName("VTCopyVideoDecoderList")
     debugger.SetAsync(False)
     err = lldb.SBError()
-    li = lldb.SBLaunchInfo(args[1:])
-    p = t.Launch(li, err)
-    sym = t.FindSymbols("sDisableRegistryCodesignValidation")
-    addr = sym[0].GetSymbol().GetStartAddress().GetLoadAddress(t)
+    launch_info = lldb.SBLaunchInfo(args[1:])
+    process = target.Launch(launch_info, err)
+    symbols = target.FindSymbols("sDisableRegistryCodesignValidation")
+    addr = symbols[0].GetSymbol().GetStartAddress().GetLoadAddress(target)
     print(f"flag @ {addr:#x}")
-    w = t.WatchAddress(addr, 1, False, True, err)
+    target.WatchAddress(addr, 1, False, True, err)
     print("watch", err)
     for _ in range(4):
-        p.Continue()
-        if p.GetState() != lldb.eStateStopped:
+        process.Continue()
+        if process.GetState() != lldb.eStateStopped:
             break
-        th = p.GetSelectedThread()
-        print("stop:", th.GetStopDescription(200))
-        for i in range(min(6, th.GetNumFrames())):
-            f = th.GetFrameAtIndex(i)
-            print(f"  #{i} {f.GetPC():#x} {f.GetModule().GetFileSpec().GetFilename()}`{f.GetFunctionName()}")
-        f0 = th.GetFrameAtIndex(0)
-        insts = t.ReadInstructions(lldb.SBAddress(f0.GetPC() - 0x50, t), 40)
-        for ins in insts:
-            print(f"    {ins.GetAddress().GetLoadAddress(t):#x} {ins.GetMnemonic(t)} {ins.GetOperands(t)}  {ins.GetComment(t)}")
-    p.Kill()
+        thread = process.GetSelectedThread()
+        print("stop:", thread.GetStopDescription(200))
+        for i in range(min(6, thread.GetNumFrames())):
+            frame = thread.GetFrameAtIndex(i)
+            print(
+                f"  #{i} {frame.GetPC():#x} "
+                f"{frame.GetModule().GetFileSpec().GetFilename()}`"
+                f"{frame.GetFunctionName()}"
+            )
+        frame0 = thread.GetFrameAtIndex(0)
+        insts = target.ReadInstructions(
+            lldb.SBAddress(frame0.GetPC() - 0x50, target), 40
+        )
+        for inst in insts:
+            print(
+                f"    {inst.GetAddress().GetLoadAddress(target):#x} "
+                f"{inst.GetMnemonic(target)} {inst.GetOperands(target)}  "
+                f"{inst.GetComment(target)}"
+            )
+    process.Kill()
 
-def __lldb_init_module(debugger, d):
-    debugger.HandleCommand("command script add -f watchflag.watchflag watchflag")
+
+def __lldb_init_module(debugger: lldb.SBDebugger, unused_dict: dict) -> None:
+    """Register the watchflag command with lldb."""
+    del unused_dict  # Unused.
+    debugger.HandleCommand(
+        "command script add -f watchflag.watchflag watchflag"
+    )

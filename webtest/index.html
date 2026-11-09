@@ -1,58 +1,174 @@
 <!DOCTYPE html>
-<html><body style="margin:8px;background:#000">
-<video id="v" muted playsinline style="width:60%"></video>
-<pre id="r" style="color:#0f0;font:13px Menlo;white-space:pre-wrap">running...</pre>
-<script>
-const out = [];
-const log = (k, v) => out.push(k + ": " + (typeof v === "string" ? v : JSON.stringify(v)));
-const send = () => {
-  const text = out.join("\n");
-  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.done) window.webkit.messageHandlers.done.postMessage(text);
-  document.getElementById("r").textContent = text;
-};
-
-async function caps(type, contentType, w, h, fps, bitrate) {
-  try {
-    const r = await navigator.mediaCapabilities.decodingInfo({type, video: {contentType, width: w, height: h, bitrate, framerate: fps}});
-    return {supported: r.supported, smooth: r.smooth, powerEfficient: r.powerEfficient};
-  } catch (e) { return String(e); }
-}
-
-async function main() {
-  const v = document.getElementById("v");
-  log("userAgent", navigator.userAgent);
-  for (const c of ['video/mp4; codecs="av01.0.12M.08"', 'video/mp4; codecs="av01.0.13M.10"', 'video/webm; codecs="av01.0.12M.08"',
-                   'video/mp4; codecs="avc1.640033"', 'video/webm; codecs="vp09.00.51.08"'])
-    log("MSE " + c, String(window.MediaSource && MediaSource.isTypeSupported(c)));
-  log("canPlayType av01 mp4", v.canPlayType('video/mp4; codecs="av01.0.12M.08"'));
-  log("caps MSE av1 4K30 L5.0", await caps("media-source", 'video/mp4; codecs="av01.0.12M.08"', 3840, 2160, 30, 20000000));
-  log("caps MSE av1 4K60 L5.1", await caps("media-source", 'video/mp4; codecs="av01.0.13M.08"', 3840, 2160, 60, 20000000));
-  log("caps MSE av1 4K60 L5.1 webm", await caps("media-source", 'video/webm; codecs="av01.0.13M.08"', 3840, 2160, 60, 20000000));
-  log("caps MSE av1 4K60 10bit", await caps("media-source", 'video/webm; codecs="av01.0.13M.10"', 3840, 2160, 60, 25000000));
-  log("caps MSE av1 8K30 L6.0", await caps("media-source", 'video/mp4; codecs="av01.0.16M.08"', 7680, 4320, 30, 40000000));
-  log("caps file av1 4K30", await caps("file", 'video/mp4; codecs="av01.0.12M.08"', 3840, 2160, 30, 20000000));
-  log("caps MSE vp9 4K60", await caps("media-source", 'video/webm; codecs="vp09.00.51.08"', 3840, 2160, 60, 20000000));
-
-  if (window.VideoDecoder) {
-    for (const c of ["av01.0.13M.08", "av01.0.13M.10", "vp09.00.51.08"]) {
-      for (const hw of ["prefer-hardware", "no-preference"]) {
-        try {
-          const r = await VideoDecoder.isConfigSupported({codec: c, codedWidth: 3840, codedHeight: 2160, hardwareAcceleration: hw});
-          log("WebCodecs " + c + " " + hw, String(r.supported));
-        } catch (e) { log("WebCodecs " + c + " " + hw, String(e)); }
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-zJKiIQOsoXTOy3c5szK3Xxz3cwGa138LfFRi/oJ1R/I='; style-src 'self' 'sha256-2kLUviL8LOx2crcuV/6PDHq4H5Joc5KMEt8R9rb+ja8='; media-src 'self' blob:; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+    <title>AV1 media capabilities</title>
+    <style>
+      body {
+        margin: 8px;
+        background: #000;
       }
-    }
-  } else log("WebCodecs", "VideoDecoder missing");
-  v.src = new URLSearchParams(location.search).get("clip") || "av1_4k.mp4";
-  v.loop = true;
-  v.onerror = () => { log("video error", v.error && (v.error.code + " " + v.error.message)); send(); };
-  try { await v.play(); } catch (e) { log("play() rejected", String(e)); }
-  setTimeout(() => {
-    const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : {};
-    log("video", {w: v.videoWidth, h: v.videoHeight, t: v.currentTime.toFixed(2), paused: v.paused, readyState: v.readyState,
-                  total: q.totalVideoFrames, dropped: q.droppedVideoFrames});
-    send();
-  }, 6000);
-}
-main();
-</script></body></html>
+
+      video {
+        width: 60%;
+      }
+
+      pre {
+        color: #0f0;
+        font: 13px Menlo, monospace;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <video id="v" muted playsinline></video>
+    <pre id="r">running...</pre>
+    <script>
+      const out = [];
+
+      const log = (key, value) => {
+        out.push(
+            key + ': ' +
+            (typeof value === 'string' ? value : JSON.stringify(value)));
+      };
+
+      const send = () => {
+        const text = out.join('\n');
+        if (window.webkit && window.webkit.messageHandlers &&
+            window.webkit.messageHandlers.done) {
+          window.webkit.messageHandlers.done.postMessage(text);
+        }
+        document.getElementById('r').textContent = text;
+      };
+
+      async function caps(type, contentType, width, height, fps, bitrate) {
+        try {
+          const info = await navigator.mediaCapabilities.decodingInfo({
+            type: type,
+            video: {
+              contentType: contentType,
+              width: width,
+              height: height,
+              bitrate: bitrate,
+              framerate: fps,
+            },
+          });
+          return {
+            supported: info.supported,
+            smooth: info.smooth,
+            powerEfficient: info.powerEfficient,
+          };
+        } catch (error) {
+          return String(error);
+        }
+      }
+
+      async function main() {
+        const video = document.getElementById('v');
+        log('userAgent', navigator.userAgent);
+        const codecTypes = [
+          'video/mp4; codecs="av01.0.12M.08"',
+          'video/mp4; codecs="av01.0.13M.10"',
+          'video/webm; codecs="av01.0.12M.08"',
+          'video/mp4; codecs="avc1.640033"',
+          'video/webm; codecs="vp09.00.51.08"',
+        ];
+        for (const codecType of codecTypes) {
+          log(
+              'MSE ' + codecType,
+              String(window.MediaSource && MediaSource.isTypeSupported(codecType)));
+        }
+        log(
+            'canPlayType av01 mp4',
+            video.canPlayType('video/mp4; codecs="av01.0.12M.08"'));
+        log(
+            'caps MSE av1 4K30 L5.0',
+            await caps(
+                'media-source', 'video/mp4; codecs="av01.0.12M.08"', 3840, 2160,
+                30, 20000000));
+        log(
+            'caps MSE av1 4K60 L5.1',
+            await caps(
+                'media-source', 'video/mp4; codecs="av01.0.13M.08"', 3840, 2160,
+                60, 20000000));
+        log(
+            'caps MSE av1 4K60 L5.1 webm',
+            await caps(
+                'media-source', 'video/webm; codecs="av01.0.13M.08"', 3840, 2160,
+                60, 20000000));
+        log(
+            'caps MSE av1 4K60 10bit',
+            await caps(
+                'media-source', 'video/webm; codecs="av01.0.13M.10"', 3840, 2160,
+                60, 25000000));
+        log(
+            'caps MSE av1 8K30 L6.0',
+            await caps(
+                'media-source', 'video/mp4; codecs="av01.0.16M.08"', 7680, 4320,
+                30, 40000000));
+        log(
+            'caps file av1 4K30',
+            await caps(
+                'file', 'video/mp4; codecs="av01.0.12M.08"', 3840, 2160, 30,
+                20000000));
+        log(
+            'caps MSE vp9 4K60',
+            await caps(
+                'media-source', 'video/webm; codecs="vp09.00.51.08"', 3840, 2160,
+                60, 20000000));
+
+        if (window.VideoDecoder) {
+          for (const codec of ['av01.0.13M.08', 'av01.0.13M.10', 'vp09.00.51.08']) {
+            for (const hw of ['prefer-hardware', 'no-preference']) {
+              try {
+                const info = await VideoDecoder.isConfigSupported({
+                  codec: codec,
+                  codedWidth: 3840,
+                  codedHeight: 2160,
+                  hardwareAcceleration: hw,
+                });
+                log('WebCodecs ' + codec + ' ' + hw, String(info.supported));
+              } catch (error) {
+                log('WebCodecs ' + codec + ' ' + hw, String(error));
+              }
+            }
+          }
+        } else {
+          log('WebCodecs', 'VideoDecoder missing');
+        }
+
+        video.src = new URLSearchParams(location.search).get('clip') || 'av1_4k.mp4';
+        video.loop = true;
+        video.onerror = () => {
+          log(
+              'video error',
+              video.error && (video.error.code + ' ' + video.error.message));
+          send();
+        };
+        try {
+          await video.play();
+        } catch (error) {
+          log('play() rejected', String(error));
+        }
+        setTimeout(() => {
+          const quality = video.getVideoPlaybackQuality ?
+              video.getVideoPlaybackQuality() :
+              {};
+          log('video', {
+            w: video.videoWidth,
+            h: video.videoHeight,
+            t: video.currentTime.toFixed(2),
+            paused: video.paused,
+            readyState: video.readyState,
+            total: quality.totalVideoFrames,
+            dropped: quality.droppedVideoFrames,
+          });
+          send();
+        }, 6000);
+      }
+
+      main();
+    </script>
+  </body>
+</html>

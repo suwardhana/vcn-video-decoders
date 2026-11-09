@@ -1,6 +1,10 @@
-// VP9 uncompressed header parser and superframe splitter. Only what a VCN decode message needs: the
-// firmware reads the compressed header and the tiles itself and keeps the probability contexts.
-#pragma once
+// VP9 uncompressed header parser and superframe splitter. Only what a VCN
+// decode message needs: the firmware reads the compressed header and the tiles
+// itself and keeps the probability contexts.
+
+#ifndef VCNVP9_VP9PARSE_H_
+#define VCNVP9_VP9PARSE_H_
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -23,7 +27,8 @@ typedef struct {
   int sign_bias[3];
   uint32_t width, height;
   int allow_high_precision_mv;
-  int interp_filter;  // firmware numbering: 0 regular, 1 smooth, 2 sharp, 3 bilinear, 4 switchable
+  int interp_filter;  // firmware numbering: 0 regular, 1 smooth, 2 sharp, 3
+                      // bilinear, 4 switchable
   int refresh_frame_context, frame_parallel;
   int frame_context_idx;
   int lf_level, lf_sharpness, lf_delta_enabled, lf_delta_update;
@@ -51,17 +56,26 @@ typedef struct {
 
 typedef enum { VP9_PARSE_DECODE, VP9_PARSE_SHOW_EXISTING } VP9ParseResult;
 
-// Called once per coded frame, with that frame's bytes (superframe index removed).
-typedef int (*VP9FrameFn)(void *ctx, VP9Parser *p, VP9ParseResult kind, const uint8_t *data, size_t size);
+// Called once per coded frame, with that frame's bytes (superframe index
+// removed).
+typedef int (*VP9FrameFn)(void* ctx, VP9Parser* p, VP9ParseResult kind,
+                          const uint8_t* data, size_t size);
 
-void vp9_parser_init(VP9Parser *p);
-// Parses one frame's uncompressed header into p->fh. Returns 0 or -1 with p->err set.
-int vp9_parse_frame_header(VP9Parser *p, const uint8_t *data, size_t size);
-// Applies refresh_frame_flags and the last-frame state after a frame was decoded into dpb_slot.
-void vp9_frame_done(VP9Parser *p, int dpb_slot);
-// Splits a container chunk (a superframe or a single frame) and runs fn on each coded frame.
-int vp9_parse_chunk(VP9Parser *p, const uint8_t *data, size_t size, VP9FrameFn fn, void *ctx);
+void vp9_parser_init(VP9Parser* p);
+// Parses one frame's uncompressed header into p->fh. Returns 0 or -1 with
+// p->err set.
+int vp9_parse_frame_header(VP9Parser* p, const uint8_t* data, size_t size);
+// Applies refresh_frame_flags and the last-frame state after a frame was
+// decoded into dpb_slot.
+void vp9_frame_done(VP9Parser* p, int dpb_slot);
+// Splits a container chunk (a superframe or a single frame) and runs fn on each
+// coded frame.
+int vp9_parse_chunk(VP9Parser* p, const uint8_t* data, size_t size,
+                    VP9FrameFn fn, void* ctx);
 // True for what the VCN can decode: profile 0 or 2, 8 or 10 bit, 4:2:0.
-bool vp9_frame_supported(const VP9Parser *p);
-// Firmware message value: per segment, per reference, per mode loop filter level (libvpx rule).
-void vp9_lf_adj_levels(const VP9Parser *p, uint8_t out[8][4][2]);
+bool vp9_frame_supported(const VP9Parser* p);
+// Firmware message value: per segment, per reference, per mode loop filter
+// level (libvpx rule).
+void vp9_lf_adj_levels(const VP9Parser* p, uint8_t out[8][4][2]);
+
+#endif  // VCNVP9_VP9PARSE_H_

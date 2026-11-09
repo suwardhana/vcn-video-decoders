@@ -1,5 +1,10 @@
-# lldb script: `stubs <function>` disassembles a function and prints the real target of each stub call.
-import lldb, re
+"""lldb script: `stubs <function>` disassembles a function and prints the real target of each stub call."""
+
+from __future__ import annotations
+
+import lldb
+import re
+
 
 def resolve(target, process, addr):
     err = lldb.SBError()
@@ -16,6 +21,7 @@ def resolve(target, process, addr):
         return sym.GetName() if sym.IsValid() else hex(dest)
     return ins.GetMnemonic(target) + " " + ops
 
+
 def stubs(debugger, command, result, internal_dict):
     target = debugger.GetSelectedTarget()
     process = target.GetProcess()
@@ -25,7 +31,11 @@ def stubs(debugger, command, result, internal_dict):
             sym = ctx.GetSymbol()
             start = sym.GetStartAddress()
             end = sym.GetEndAddress()
-            insts = target.ReadInstructions(start, end.GetLoadAddress(target) - start.GetLoadAddress(target) and 4000)
+            insts = target.ReadInstructions(
+                start,
+                end.GetLoadAddress(target) - start.GetLoadAddress(target)
+                and 4000,
+            )
             base = start.GetLoadAddress(target)
             stop = end.GetLoadAddress(target)
             print(f"== {sym.GetName()} @ {base:#x}")
@@ -38,11 +48,20 @@ def stubs(debugger, command, result, internal_dict):
                     ops = ins.GetOperands(target)
                     try:
                         tgt = int(ops, 16)
-                        tsym = target.ResolveLoadAddress(tgt).GetSymbol().GetName() or ""
-                        real = resolve(target, process, tgt) if "stub" in (tsym or "") or "HwlIsStandardSwizzle" in tsym else tsym
+                        tsym = (
+                            target.ResolveLoadAddress(tgt).GetSymbol().GetName()
+                            or ""
+                        )
+                        real = (
+                            resolve(target, process, tgt)
+                            if "stub" in (tsym or "")
+                            or "HwlIsStandardSwizzle" in tsym
+                            else tsym
+                        )
                     except ValueError:
                         real = ops
                     print(f"  +{a - base:#06x} call {real}")
+
 
 def __lldb_init_module(debugger, internal_dict):
     debugger.HandleCommand("command script add -f resolve_stubs.stubs stubs")

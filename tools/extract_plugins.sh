@@ -1,4 +1,7 @@
 #!/bin/zsh
+# zsh is required: this is a macOS installer/build script. Google Shell
+# Style permits a non-bash interpreter when the execution environment
+# forces it (https://google.github.io/styleguide/shellguide.html).
 # Extract the VideoToolbox decoder plugins from a macOS update asset (SharedSupport.dmg payload chunks).
 #   extract_plugins.sh <dir with SharedSupport.dmg> <out dir>
 set -u

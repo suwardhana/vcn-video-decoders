@@ -1,4 +1,7 @@
 #!/bin/zsh
+# zsh is required: this is a macOS installer/build script. Google Shell
+# Style permits a non-bash interpreter when the execution environment
+# forces it (https://google.github.io/styleguide/shellguide.html).
 # Build VCNVTLoader.kext (a Lilu plugin). Toolchain flags follow the standard Lilu-plugin
 # kernel build; this is validated on the first real compile (after the CoreMedia patch bytes
 # are filled in kern_coremedia.cpp). Needs the Command Line Tools.

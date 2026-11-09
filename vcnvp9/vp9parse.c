@@ -1,29 +1,41 @@
 #include "vp9parse.h"
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
 typedef struct {
-  const uint8_t *d;
+  const uint8_t* d;
   size_t bits, pos;
   bool over;
 } BR;
 
-static uint32_t f(BR *b, int n) {
+static uint32_t f(BR* b, int n) {
   uint32_t v = 0;
+  if (n < 0 || n > 32) {
+    b->over = true;
+    return 0;
+  }
   for (int i = 0; i < n; i++) {
-    if (b->pos >= b->bits) { b->over = true; return 0; }
+    if (b->pos >= b->bits) {
+      b->over = true;
+      return 0;
+    }
     v = (v << 1) | ((b->d[b->pos >> 3] >> (7 - (b->pos & 7))) & 1);
     b->pos++;
   }
   return v;
 }
-static int su(BR *b, int n) {
+static int su(BR* b, int n) {
+  if (n < 0 || n > 31) {
+    b->over = true;
+    return 0;
+  }
   int v = (int)f(b, n);
   return f(b, 1) ? -v : v;
 }
 
-static int fail(VP9Parser *p, const char *fmt, ...) {
+static int fail(VP9Parser* p, const char* fmt, ...) {
   va_list a;
   va_start(a, fmt);
   vsnprintf(p->err, sizeof(p->err), fmt, a);
@@ -31,7 +43,7 @@ static int fail(VP9Parser *p, const char *fmt, ...) {
   return -1;
 }
 
-void vp9_parser_init(VP9Parser *p) {
+void vp9_parser_init(VP9Parser* p) {
   memset(p, 0, sizeof(*p));
   for (int i = 0; i < 8; i++) p->ref[i].dpb_slot = -1;
   p->bit_depth = 8;
@@ -40,7 +52,7 @@ void vp9_parser_init(VP9Parser *p) {
   memset(p->seg_pred_probs, 255, sizeof(p->seg_pred_probs));
 }
 
-static int color_config(VP9Parser *p, BR *b, int profile) {
+static int color_config(VP9Parser* p, BR* b, int profile) {
   int depth = 8;
   if (profile >= 2) depth = f(b, 1) ? 12 : 10;
   int cs = (int)f(b, 3);
@@ -55,7 +67,8 @@ static int color_config(VP9Parser *p, BR *b, int profile) {
       ssx = ssy = 1;
     }
   } else {
-    if (profile != 1 && profile != 3) return fail(p, "RGB needs profile 1 or 3");
+    if (profile != 1 && profile != 3)
+      return fail(p, "RGB needs profile 1 or 3");
     ssx = ssy = 0;
     f(b, 1);
   }
@@ -65,16 +78,17 @@ static int color_config(VP9Parser *p, BR *b, int profile) {
   return 0;
 }
 
-static void frame_size(BR *b, VP9Frame *h) {
+static void frame_size(BR* b, VP9Frame* h) {
   h->width = f(b, 16) + 1;
   h->height = f(b, 16) + 1;
 }
-static void render_size(BR *b) {
+static void render_size(BR* b) {
   if (f(b, 1)) f(b, 32);
 }
 
-// setup_past_independence: only the parts this side tracks, the firmware resets its own probabilities.
-static void past_independence(VP9Parser *p) {
+// setup_past_independence: only the parts this side tracks, the firmware resets
+// its own probabilities.
+static void past_independence(VP9Parser* p) {
   memset(p->seg_feature_mask, 0, sizeof(p->seg_feature_mask));
   memset(p->seg_feature_data, 0, sizeof(p->seg_feature_data));
   p->seg_abs_delta = 0;
@@ -83,9 +97,9 @@ static void past_independence(VP9Parser *p) {
   p->lf_mode_deltas[0] = p->lf_mode_deltas[1] = 0;
 }
 
-static uint8_t read_prob(BR *b) { return f(b, 1) ? (uint8_t)f(b, 8) : 255; }
+static uint8_t read_prob(BR* b) { return f(b, 1) ? (uint8_t)f(b, 8) : 255; }
 
-static void segmentation_params(VP9Parser *p, BR *b, VP9Frame *h) {
+static void segmentation_params(VP9Parser* p, BR* b, VP9Frame* h) {
   static const int bits[4] = {8, 6, 2, 0};
   static const int sign[4] = {1, 1, 0, 0};
   h->seg_update_map = h->seg_temporal_update = h->seg_update_data = 0;
@@ -95,7 +109,8 @@ static void segmentation_params(VP9Parser *p, BR *b, VP9Frame *h) {
   if (h->seg_update_map) {
     for (int i = 0; i < 7; i++) p->seg_tree_probs[i] = read_prob(b);
     h->seg_temporal_update = (int)f(b, 1);
-    for (int i = 0; i < 3; i++) p->seg_pred_probs[i] = h->seg_temporal_update ? read_prob(b) : 255;
+    for (int i = 0; i < 3; i++)
+      p->seg_pred_probs[i] = h->seg_temporal_update ? read_prob(b) : 255;
   }
   h->seg_update_data = (int)f(b, 1);
   if (h->seg_update_data) {
@@ -113,7 +128,7 @@ static void segmentation_params(VP9Parser *p, BR *b, VP9Frame *h) {
   }
 }
 
-static void tile_info(BR *b, VP9Frame *h) {
+static void tile_info(BR* b, VP9Frame* h) {
   uint32_t sb64_cols = (((h->width + 7) >> 3) + 7) >> 3;
   int min_log2 = 0, max_log2 = 1;
   while ((64u << min_log2) < sb64_cols) min_log2++;
@@ -125,9 +140,12 @@ static void tile_info(BR *b, VP9Frame *h) {
   if (h->log2_tile_rows) h->log2_tile_rows += (int)f(b, 1);
 }
 
-int vp9_parse_frame_header(VP9Parser *p, const uint8_t *data, size_t size) {
+int vp9_parse_frame_header(VP9Parser* p, const uint8_t* data, size_t size) {
+  if (!p) return -1;
+  if ((!data && size) || size > SIZE_MAX / 8)
+    return fail(p, "invalid input size");
   BR br = {data, size * 8, 0, false}, *b = &br;
-  VP9Frame *h = &p->fh;
+  VP9Frame* h = &p->fh;
   memset(h, 0, sizeof(*h));
   p->err[0] = 0;
   if (f(b, 2) != 2) return fail(p, "bad frame marker");
@@ -174,7 +192,7 @@ int vp9_parse_frame_header(VP9Parser *p, const uint8_t *data, size_t size) {
       bool found = false;
       for (int i = 0; i < 3 && !found; i++)
         if (f(b, 1)) {
-          const VP9Ref *r = &p->ref[h->ref_frame_idx[i]];
+          const VP9Ref* r = &p->ref[h->ref_frame_idx[i]];
           if (!r->valid) return fail(p, "frame size from a missing reference");
           h->width = r->width;
           h->height = r->height;
@@ -203,7 +221,8 @@ int vp9_parse_frame_header(VP9Parser *p, const uint8_t *data, size_t size) {
   }
   h->frame_context_idx = (int)f(b, 2);
   if (is_intra || h->error_res) past_independence(p);
-  if (is_intra) h->frame_context_idx = 0;  // libvpx ignores the coded value here
+  if (is_intra)
+    h->frame_context_idx = 0;  // libvpx ignores the coded value here
   // loop filter
   h->lf_level = (int)f(b, 6);
   h->lf_sharpness = (int)f(b, 3);
@@ -228,17 +247,23 @@ int vp9_parse_frame_header(VP9Parser *p, const uint8_t *data, size_t size) {
   if (b->over) return fail(p, "truncated header");
   if (!h->compressed_header_size) return fail(p, "no compressed header");
   h->uncompressed_header_size = (uint32_t)((b->pos + 7) >> 3);
-  if (h->uncompressed_header_size + h->compressed_header_size > size) return fail(p, "headers past the frame");
-  h->use_prev_frame_mvs = p->have_last && !h->error_res && h->width == p->last_width && h->height == p->last_height &&
-                          p->last_show_frame && !p->last_intra_only;
+  if (h->uncompressed_header_size + h->compressed_header_size > size)
+    return fail(p, "headers past the frame");
+  h->use_prev_frame_mvs =
+      p->have_last && !h->error_res && h->width == p->last_width &&
+      h->height == p->last_height && p->last_show_frame && !p->last_intra_only;
   return 0;
 }
 
-void vp9_frame_done(VP9Parser *p, int dpb_slot) {
-  const VP9Frame *h = &p->fh;
+void vp9_frame_done(VP9Parser* p, int dpb_slot) {
+  const VP9Frame* h = &p->fh;
   for (int i = 0; i < 8; i++)
     if (h->refresh_frame_flags & (1u << i))
-      p->ref[i] = (VP9Ref){.valid = true, .dpb_slot = dpb_slot, .width = h->width, .height = h->height, .bit_depth = h->bit_depth};
+      p->ref[i] = (VP9Ref){.valid = true,
+                           .dpb_slot = dpb_slot,
+                           .width = h->width,
+                           .height = h->height,
+                           .bit_depth = h->bit_depth};
   p->last_width = h->width;
   p->last_height = h->height;
   p->last_show_frame = h->show_frame;
@@ -246,8 +271,8 @@ void vp9_frame_done(VP9Parser *p, int dpb_slot) {
   p->have_last = 1;
 }
 
-bool vp9_frame_supported(const VP9Parser *p) {
-  const VP9Frame *h = &p->fh;
+bool vp9_frame_supported(const VP9Parser* p) {
+  const VP9Frame* h = &p->fh;
   if (h->profile != 0 && h->profile != 2) return false;
   if (h->bit_depth != 8 && h->bit_depth != 10) return false;
   return h->subsampling_x == 1 && h->subsampling_y == 1;
@@ -255,8 +280,8 @@ bool vp9_frame_supported(const VP9Parser *p) {
 
 static int clamp63(int v) { return v < 0 ? 0 : v > 63 ? 63 : v; }
 
-void vp9_lf_adj_levels(const VP9Parser *p, uint8_t out[8][4][2]) {
-  const VP9Frame *h = &p->fh;
+void vp9_lf_adj_levels(const VP9Parser* p, uint8_t out[8][4][2]) {
+  const VP9Frame* h = &p->fh;
   const int scale = 1 << (h->lf_level >> 5);
   memset(out, 0, 8 * 4 * 2);
   for (int s = 0; s < 8; s++) {
@@ -266,30 +291,41 @@ void vp9_lf_adj_levels(const VP9Parser *p, uint8_t out[8][4][2]) {
       if (!p->seg_abs_delta) d += base;
       base = clamp63(d);
     }
-    out[s][0][0] = (uint8_t)(h->lf_delta_enabled ? clamp63(base + p->lf_ref_deltas[0] * scale) : base);
+    out[s][0][0] = (uint8_t)(h->lf_delta_enabled
+                                 ? clamp63(base + p->lf_ref_deltas[0] * scale)
+                                 : base);
     for (int r = 1; r < 4; r++)
       for (int m = 0; m < 2; m++)
-        out[s][r][m] = (uint8_t)(h->lf_delta_enabled ? clamp63(base + (p->lf_ref_deltas[r] + p->lf_mode_deltas[m]) * scale) : base);
+        out[s][r][m] = (uint8_t)(h->lf_delta_enabled
+                                     ? clamp63(base + (p->lf_ref_deltas[r] +
+                                                       p->lf_mode_deltas[m]) *
+                                                          scale)
+                                     : base);
   }
 }
 
-int vp9_parse_chunk(VP9Parser *p, const uint8_t *data, size_t size, VP9FrameFn fn, void *ctx) {
+int vp9_parse_chunk(VP9Parser* p, const uint8_t* data, size_t size,
+                    VP9FrameFn fn, void* ctx) {
+  if (!p) return -1;
   if (!size) return 0;
+  if (!data || !fn) return fail(p, "invalid chunk input");
   size_t sizes[8], count = 0;
   uint8_t last = data[size - 1];
   if ((last & 0xe0) == 0xc0) {
     int frames = (last & 7) + 1, mag = ((last >> 3) & 3) + 1;
     size_t index = 2 + (size_t)mag * (size_t)frames;
     if (size >= index && data[size - index] == last) {
-      const uint8_t *x = data + size - index + 1;
+      const uint8_t* x = data + size - index + 1;
       size_t total = 0;
       for (int i = 0; i < frames; i++) {
         size_t s = 0;
         for (int j = 0; j < mag; j++) s |= (size_t)*x++ << (8 * j);
+        if (s > SIZE_MAX - total) return fail(p, "superframe sizes overflow");
         sizes[i] = s;
         total += s;
       }
-      if (total > size - index) return fail(p, "superframe sizes past the chunk");
+      if (total != size - index)
+        return fail(p, "superframe sizes do not match the chunk");
       count = (size_t)frames;
     }
   }
@@ -301,10 +337,13 @@ int vp9_parse_chunk(VP9Parser *p, const uint8_t *data, size_t size, VP9FrameFn f
   for (size_t i = 0; i < count; i++) {
     size_t s = sizes[i];
     if (!s) continue;
-    const uint8_t *d = data + off;
+    const uint8_t* d = data + off;
     off += s;
     if (vp9_parse_frame_header(p, d, s)) return -1;
-    int r = fn(ctx, p, p->fh.show_existing_frame ? VP9_PARSE_SHOW_EXISTING : VP9_PARSE_DECODE, d, s);
+    int r = fn(
+        ctx, p,
+        p->fh.show_existing_frame ? VP9_PARSE_SHOW_EXISTING : VP9_PARSE_DECODE,
+        d, s);
     if (r) return r;
   }
   return 0;

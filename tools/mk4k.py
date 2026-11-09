@@ -1,72 +1,133 @@
-# Make synthetic AV1 IVF clips with SVT-AV1 and per-frame I420 MD5 references decoded by dav1d.
-#   .re/venv/bin/python tools/mk4k.py <out.ivf> <w> <h> <frames> <bitdepth 8|10> [svt-params]
-import hashlib, sys
-import av, numpy as np
+#!/usr/bin/env python3
+"""Make synthetic AV1 IVF clips and per-frame I420 MD5 references.
 
-out, W, H, N, BD = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
-params = sys.argv[6] if len(sys.argv) > 6 else ""
+SVT-AV1 encodes the clip; dav1d produces the MD5 list.
 
-def frame(i):
-    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+Usage:
+  .re/venv/bin/python tools/mk4k.py <out.ivf> <w> <h> <frames> <bitdepth 8|10> [svt-params]
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import sys
+
+import av
+import numpy as np
+
+
+def frame(index: int, width: int, height: int):
+    """Return (y, u, v) float planes for synthetic frame `index`."""
+    yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
     rng = np.random.default_rng(1234)
     tex = rng.integers(0, 255, (256, 256)).astype(np.float32)
-    t = np.roll(np.roll(tex, i * 7, 0), i * 13, 1)
-    t = np.tile(t, (H // 256 + 1, W // 256 + 1))[:H, :W]
-    y = 0.35 * (xx / W * 255) + 0.35 * t + 0.3 * (128 + 127 * np.sin((xx + i * 24) / 90) * np.cos((yy - i * 11) / 70))
+    tiled = np.roll(np.roll(tex, index * 7, 0), index * 13, 1)
+    tiled = np.tile(tiled, (height // 256 + 1, width // 256 + 1))[
+        :height, :width
+    ]
+    luma = (
+        0.35 * (xx / width * 255)
+        + 0.35 * tiled
+        + 0.3
+        * (
+            128
+            + 127
+            * np.sin((xx + index * 24) / 90)
+            * np.cos((yy - index * 11) / 70)
+        )
+    )
     for k in range(6):  # moving discs
-        cx, cy = (W * (0.1 + 0.15 * k) + i * (9 + 3 * k)) % W, H * (0.2 + 0.1 * k) + 120 * np.sin(i / 9 + k)
-        y = np.where((xx - cx) ** 2 + (yy - cy) ** 2 < (60 + 20 * k) ** 2, 235 - 20 * k, y)
-    u = 128 + 60 * np.sin((xx[::2, ::2] + i * 5) / 200)
-    v = 128 + 60 * np.cos((yy[::2, ::2] - i * 4) / 150)
-    return y, u, v
+        cx = (width * (0.1 + 0.15 * k) + index * (9 + 3 * k)) % width
+        cy = height * (0.2 + 0.1 * k) + 120 * np.sin(index / 9 + k)
+        luma = np.where(
+            (xx - cx) ** 2 + (yy - cy) ** 2 < (60 + 20 * k) ** 2,
+            235 - 20 * k,
+            luma,
+        )
+    u = 128 + 60 * np.sin((xx[::2, ::2] + index * 5) / 200)
+    v = 128 + 60 * np.cos((yy[::2, ::2] - index * 4) / 150)
+    return luma, u, v
 
-import os
-if not os.environ.get("MD5ONLY"):
-    oc = av.open(out, "w", format="ivf")
-    st = oc.add_stream("libsvtav1", rate=30)
-    st.width, st.height = W, H
-    st.pix_fmt = "yuv420p10le" if BD == 10 else "yuv420p"
-    st.options = {"preset": "10", "crf": "32", "g": "30"}
-    if params:
-        st.options["svtav1-params"] = params
-    for i in range(N):
-        y, u, v = frame(i)
-        if BD == 10:
-            planes = [(p * 4).clip(0, 1023).astype(np.uint16) for p in (y, u, v)]
-            f = av.VideoFrame(W, H, "yuv420p10le")
-        else:
-            planes = [p.clip(0, 255).astype(np.uint8) for p in (y, u, v)]
-            f = av.VideoFrame(W, H, "yuv420p")
-        for k, p in enumerate(planes):
-            buf = np.frombuffer(f.planes[k], dtype=p.dtype).reshape(-1, f.planes[k].line_size // p.itemsize)
-            buf[: p.shape[0], : p.shape[1]] = p
-        f.pts = i
-        for pkt in st.encode(f):
-            oc.mux(pkt)
-    for pkt in st.encode():
-        oc.mux(pkt)
-    oc.close()
 
-# reference MD5s via dav1d
-ic = av.open(out)
-ic.streams.video[0].codec_context.options = {}
-dec = av.codec.CodecContext.create("libdav1d", "r")
-n = 0
-def emit(fp, fr):
-    global n
-    m = hashlib.md5()
-    bpe = 2 if BD == 10 else 1
-    for k, (pw, ph) in enumerate([(W, H), ((W + 1) // 2, (H + 1) // 2), ((W + 1) // 2, (H + 1) // 2)]):
-        pl = fr.planes[k]
-        a = np.frombuffer(pl, dtype=np.uint8).reshape(-1, pl.line_size)[:ph, : pw * bpe]
-        m.update(a.tobytes())
-    fp.write(f"{m.hexdigest()}  frame-{n:04d}.i420\n")
-    n += 1
-with open(out + ".md5", "w") as fp:
-    for pkt in ic.demux(video=0):
-        if pkt.size:
-            for fr in dec.decode(pkt):
-                emit(fp, fr)
-    for fr in dec.decode(None):
-        emit(fp, fr)
-print(out, "frames md5:", n)
+def main(argv: list[str] | None = None) -> None:
+    """Encode the synthetic clip and write `<out>.md5`."""
+    args = sys.argv if argv is None else argv
+    out, width, height, n_frames, bit_depth = (
+        args[1],
+        int(args[2]),
+        int(args[3]),
+        int(args[4]),
+        int(args[5]),
+    )
+    params = args[6] if len(args) > 6 else ""
+
+    if not os.environ.get("MD5ONLY"):
+        container = av.open(out, "w", format="ivf")
+        stream = container.add_stream("libsvtav1", rate=30)
+        stream.width, stream.height = width, height
+        stream.pix_fmt = "yuv420p10le" if bit_depth == 10 else "yuv420p"
+        stream.options = {"preset": "10", "crf": "32", "g": "30"}
+        if params:
+            stream.options["svtav1-params"] = params
+        for i in range(n_frames):
+            y, u, v = frame(i, width, height)
+            if bit_depth == 10:
+                planes = [
+                    (plane * 4).clip(0, 1023).astype(np.uint16)
+                    for plane in (y, u, v)
+                ]
+                video_frame = av.VideoFrame(width, height, "yuv420p10le")
+            else:
+                planes = [
+                    plane.clip(0, 255).astype(np.uint8) for plane in (y, u, v)
+                ]
+                video_frame = av.VideoFrame(width, height, "yuv420p")
+            for k, plane in enumerate(planes):
+                buf = np.frombuffer(
+                    video_frame.planes[k], dtype=plane.dtype
+                ).reshape(-1, video_frame.planes[k].line_size // plane.itemsize)
+                buf[: plane.shape[0], : plane.shape[1]] = plane
+            video_frame.pts = i
+            for packet in stream.encode(video_frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
+
+    input_container = av.open(out)
+    input_container.streams.video[0].codec_context.options = {}
+    decoder = av.codec.CodecContext.create("libdav1d", "r")
+    n = 0
+
+    def emit(handle, decoded_frame) -> None:
+        nonlocal n
+        digest = hashlib.md5()
+        bytes_per_element = 2 if bit_depth == 10 else 1
+        for k, (plane_w, plane_h) in enumerate(
+            [
+                (width, height),
+                ((width + 1) // 2, (height + 1) // 2),
+                ((width + 1) // 2, (height + 1) // 2),
+            ]
+        ):
+            plane = decoded_frame.planes[k]
+            arr = np.frombuffer(plane, dtype=np.uint8).reshape(
+                -1, plane.line_size
+            )[:plane_h, : plane_w * bytes_per_element]
+            digest.update(arr.tobytes())
+        handle.write(f"{digest.hexdigest()}  frame-{n:04d}.i420\n")
+        n += 1
+
+    with open(out + ".md5", "w") as handle:
+        for packet in input_container.demux(video=0):
+            if packet.size:
+                for decoded_frame in decoder.decode(packet):
+                    emit(handle, decoded_frame)
+        for decoded_frame in decoder.decode(None):
+            emit(handle, decoded_frame)
+    print(out, "frames md5:", n)
+
+
+if __name__ == "__main__":
+    main()

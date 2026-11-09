@@ -1,4 +1,7 @@
 #!/bin/zsh
+# zsh is required: this is a macOS installer/build script. Google Shell
+# Style permits a non-bash interpreter when the execution environment
+# forces it (https://google.github.io/styleguide/shellguide.html).
 # Builds VCNVideoProfile.kext, a Lilu plugin. Needs the Command Line Tools.
 set -e
 cd "${0:A:h}"

@@ -1,4 +1,7 @@
 #!/bin/zsh
+# zsh is required: this is a macOS installer/build script. Google Shell
+# Style permits a non-bash interpreter when the execution environment
+# forces it (https://google.github.io/styleguide/shellguide.html).
 #
 # repair-plugins.sh — one-off repair after the engine.sh bug of 2026-11-06 wiped
 # /System/Library/Video/Plug-Ins (Apple's plug-ins) in the boot snapshot.
@@ -6,7 +9,7 @@
 # What it does:
 #   1. mounts the live system volume read-write at /System/Volumes/Update/mnt1
 #   2. mounts the last GOOD snapshot (booted this afternoon) read-only
-#   3. replaces the damaged Plug-Ins folder with the good snapshot's copy (Apple's plug-ins)
+#   3. restores Apple's plug-ins from the good snapshot without deleting the directory
 #   4. installs AV1VCNDecoder.bundle + VP9VCNDecoder.bundle into it and verifies cdhashes
 #   5. blesses a new boot snapshot  -> reboot
 #
@@ -52,10 +55,10 @@ for must in AppleGVAHEVCDecoder.bundle AV1DecoderSW.bundle; do
 done
 echo "Apple plug-ins in good snapshot ($n):"; ls -1 "$SRC" | sed 's/^/   /'
 
-# --- replace the damaged folder ---------------------------------------------------------------
+# --- restore the damaged folder without deleting it or unrelated files -----------------------
 [[ "$DST" == "/System/Volumes/Update/mnt1/System/Library/Video/Plug-Ins" ]] || { echo "unexpected DST $DST"; exit 1; }
 echo "damaged folder currently has:"; ls -1 "$DST" 2>/dev/null | sed 's/^/   /' || true
-rm -rf -- "$DST"
+mkdir -p "$DST"
 ditto "$SRC" "$DST"
 
 # --- install our two decoders ----------------------------------------------------------------

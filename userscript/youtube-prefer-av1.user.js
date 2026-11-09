@@ -9,20 +9,49 @@
 // @inject-into  page
 // @grant        none
 // ==/UserScript==
-// Do NOT hide VP9 from MediaSource.isTypeSupported: YouTube sends that answer to the server as
-// devicePlaybackCapabilities.supportsVp9Encoding, and with false the server drops AV1 too (H.264 only).
+
+/**
+ * @fileoverview Reports VP9 as not power-efficient so YouTube prefers AV1.
+ *
+ * Do not hide VP9 from MediaSource.isTypeSupported: YouTube sends that
+ * answer to the server as devicePlaybackCapabilities.supportsVp9Encoding,
+ * and with false the server drops AV1 too (H.264 only).
+ */
+
 (() => {
-  "use strict";
-  const isVP9 = (s) => /vp0?9/i.test(String(s || ""));
-  const mc = navigator.mediaCapabilities;
-  if (!mc || !mc.decodingInfo) return;
-  const orig = mc.decodingInfo.bind(mc);
-  mc.decodingInfo = async (cfg) => {
-    const r = await orig(cfg);
-    if (cfg && cfg.video && isVP9(cfg.video.contentType) && r && r.supported) {
-      return { supported: true, smooth: false, powerEfficient: false, configuration: r.configuration };
+  'use strict';
+
+  /**
+   * @param {?string|undefined} contentType MIME type from mediaCapabilities.
+   * @return {boolean}
+   */
+  const isVp9 = (contentType) => /vp0?9/i.test(String(contentType || ''));
+
+  const mediaCapabilities = navigator.mediaCapabilities;
+  if (!mediaCapabilities || !mediaCapabilities.decodingInfo) {
+    return;
+  }
+
+  const originalDecodingInfo =
+      mediaCapabilities.decodingInfo.bind(mediaCapabilities);
+
+  /**
+   * @param {!MediaDecodingConfiguration} configuration
+   * @return {!Promise<!MediaCapabilitiesDecodingInfo>}
+   */
+  mediaCapabilities.decodingInfo = async (configuration) => {
+    const info = await originalDecodingInfo(configuration);
+    if (configuration && configuration.video &&
+        isVp9(configuration.video.contentType) && info && info.supported) {
+      return {
+        supported: true,
+        smooth: false,
+        powerEfficient: false,
+        configuration: info.configuration,
+      };
     }
-    return r;
+    return info;
   };
-  console.debug("[prefer-av1] VP9 reported as not power-efficient");
+
+  console.debug('[prefer-av1] VP9 reported as not power-efficient');
 })();

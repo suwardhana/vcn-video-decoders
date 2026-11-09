@@ -1,0 +1,34 @@
+# Google C/C++/Objective-C/JavaScript style.
+# https://google.github.io/styleguide/cppguide.html
+# https://google.github.io/styleguide/jsguide.html
+---
+Language: Cpp
+BasedOnStyle: Google
+ColumnLimit: 80
+IndentWidth: 2
+UseTab: Never
+DerivePointerAlignment: false
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Matching header for foo.cc -> foo.h (clang-format priority 0).
+  - Regex: '^".*"'
+    Priority: 3
+    SortPriority: 3
+  - Regex: '^<.*\.h>'
+    Priority: 1
+    SortPriority: 1
+  - Regex: '^<.*>'
+    Priority: 2
+    SortPriority: 2
+---
+Language: JavaScript
+BasedOnStyle: Google
+ColumnLimit: 80
+IndentWidth: 2
+UseTab: Never
+JavaScriptQuotes: Single
+JavaScriptWrapImports: true
+SortIncludes: CaseSensitive

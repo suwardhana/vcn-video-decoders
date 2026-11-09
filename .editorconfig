@@ -1,0 +1,37 @@
+# https://editorconfig.org — Google style defaults for this repo.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+
+[*.{c,h,cc,cpp,hpp,m,mm}]
+indent_size = 2
+max_line_length = 80
+
+[*.{js,html,css}]
+indent_size = 2
+max_line_length = 80
+
+[*.py]
+indent_size = 4
+max_line_length = 80
+
+[*.swift]
+indent_size = 2
+max_line_length = 100
+
+[*.{sh,zsh}]
+indent_size = 2
+max_line_length = 80
+
+[*.{json,yml,yaml}]
+indent_size = 2
+
+[*.md]
+indent_size = 2
+max_line_length = 80
+trim_trailing_whitespace = false

@@ -1,4 +1,7 @@
 #!/bin/zsh
+# zsh is required: this is a macOS installer/build script. Google Shell
+# Style permits a non-bash interpreter when the execution environment
+# forces it (https://google.github.io/styleguide/shellguide.html).
 # Build "AMD VCN Video Decoders.app": SwiftUI front-end + engine.sh + both decoder bundles.
 # Output: installer/build/AMD VCN Video Decoders.app  (make-dmg.sh packages it for sharing).
 set -e

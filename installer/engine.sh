@@ -1,4 +1,7 @@
 #!/bin/zsh
+# zsh is required: this is a macOS installer/build script. Google Shell
+# Style permits a non-bash interpreter when the execution environment
+# forces it (https://google.github.io/styleguide/shellguide.html).
 #
 # engine.sh — install/uninstall the AMD VCN VideoToolbox plug-ins (AV1 + VP9) into the sealed
 # /System/Library/Video/Plug-Ins, plus an idiot-proof preflight. One engine shared by the CLI

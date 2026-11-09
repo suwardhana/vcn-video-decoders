@@ -1,4 +1,7 @@
 #!/bin/zsh
+# zsh is required: this is a macOS installer/build script. Google Shell
+# Style permits a non-bash interpreter when the execution environment
+# forces it (https://google.github.io/styleguide/shellguide.html).
 #
 # install.sh — copy the two VCN plug-ins into /Library/Video/Plug-Ins.
 #
@@ -16,6 +19,10 @@ set -e
 cd "${0:A:h}"
 
 DEST=/Library/Video/Plug-Ins
+[[ "$DEST" == "/Library/Video/Plug-Ins" ]] || {
+  echo "unexpected destination: $DEST" >&2
+  exit 1
+}
 AV1_SRC=../vtav1/build/AV1VCNDecoder.bundle
 VP9_SRC=../vtvp9/build/VP9VCNDecoder.bundle
 BUNDLES=("$AV1_SRC" "$VP9_SRC")
@@ -79,7 +86,7 @@ fi
 
 if [[ "$mode" == uninstall ]]; then
   for b in AV1VCNDecoder.bundle VP9VCNDecoder.bundle; do
-    if [[ -d "$DEST/$b" ]]; then rm -rf "$DEST/$b" && echo "removed $DEST/$b"
+    if [[ -d "$DEST/$b" ]]; then rm -rf -- "$DEST/$b" && echo "removed $DEST/$b"
     else echo "not present: $DEST/$b"; fi
   done
   echo
@@ -95,7 +102,11 @@ check_cdhashes || { echo; echo "ABORTING: cdhashes do not match the kext (see ab
 mkdir -p "$DEST"
 for b in "${BUNDLES[@]}"; do
   name="${b:t}"
-  rm -rf "$DEST/$name"
+  [[ "$name" == "AV1VCNDecoder.bundle" || "$name" == "VP9VCNDecoder.bundle" ]] || {
+    echo "refusing unexpected bundle: $name" >&2
+    exit 1
+  }
+  rm -rf -- "$DEST/$name"
   cp -R "$b" "$DEST/$name"
   chown -R root:wheel "$DEST/$name"
   chmod -R go-w "$DEST/$name"

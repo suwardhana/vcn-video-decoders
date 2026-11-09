@@ -1,4 +1,7 @@
 #!/bin/zsh
+# zsh is required: this is a macOS installer/build script. Google Shell
+# Style permits a non-bash interpreter when the execution environment
+# forces it (https://google.github.io/styleguide/shellguide.html).
 # Renders assets/AppIcon.icns and assets/dmg-bg.tiff from assets/render.swift.
 set -e
 cd "${0:A:h}/assets"

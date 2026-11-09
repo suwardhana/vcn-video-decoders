@@ -1,4 +1,5 @@
 #include "vcnvp9.h"
+
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
 #include <IOSurface/IOSurfaceRef.h>
@@ -11,15 +12,20 @@
 #include <string.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
+
 #include "ac_vcn_vp9_default.h"
 #include "avd.h"
 #include "vp9msg.h"
 
 int vcnvp9_debug = 0;
 int vcnvp9_gpu_armed = 0;
-#define DBG(...) do { if (vcnvp9_debug) fprintf(stderr, "[vcnvp9] " __VA_ARGS__); } while (0)
+#define DBG(...)                                                \
+  do {                                                          \
+    if (vcnvp9_debug) fprintf(stderr, "[vcnvp9] " __VA_ARGS__); \
+  } while (0)
 
-#define VCN_MODE_VCN0 4  // VP9 runs on both instances, but AV1 contexts only work on VCN0
+#define VCN_MODE_VCN0 \
+  4  // VP9 runs on both instances, but AV1 contexts only work on VCN0
 #define NUM_DPB 9
 #define NUM_BS 4
 #define BS_SIZE 0x1800000u
@@ -29,38 +35,39 @@ int vcnvp9_gpu_armed = 0;
 #define VCN_BYPASS_DRM_CNTL 0x1000000u
 #define VCN_BYPASS_DRM_CMD 0x80000000u
 
-// Parameter block of the driver's AV1 path. The driver itself only reads output, bsinfo and the frame
-// size out of it, the rest goes to the message builder, which here is ours.
+// Parameter block of the driver's AV1 path. The driver itself only reads
+// output, bsinfo and the frame size out of it, the rest goes to the message
+// builder, which here is ours.
 typedef struct {
-  void *seq;               // +0
-  void *frame;             // +8   driver reads +312 width, +320 height
-  uint32_t curr_pic_idx;   // +16
+  void* seq;              // +0
+  void* frame;            // +8   driver reads +312 width, +320 height
+  uint32_t curr_pic_idx;  // +16
   uint32_t pad0;
-  IOSurfaceRef output;     // +24
+  IOSurfaceRef output;        // +24
   uint32_t ref_frame_map[8];  // +32
   uint32_t frame_refs[7];     // +64
   uint32_t pad1;              // +92
-  void *bsinfo;               // +96  driver reads +0 buffer index, +16 size
-  const VP9Parser *vp9;       // +104 ours
+  void* bsinfo;               // +96  driver reads +0 buffer index, +16 size
+  const VP9Parser* vp9;       // +104 ours
   uint8_t reserved[152];
 } VP9Params;
 
 typedef struct {
-  void *refcon;
+  void* refcon;
   uint32_t pollMs;
   uint32_t wait;
   uint32_t status, status2;
 } AVD_QueryEntry;
 typedef struct {
   uint32_t count, pad;
-  AVD_QueryEntry *entries;
+  AVD_QueryEntry* entries;
 } AVD_QueryList;
 
 struct VcnVP9 {
-  AVD_Accelerator *accel;
-  void *drv;
-  void *ctx;
-  void *bsAddr[NUM_BS];
+  AVD_Accelerator* accel;
+  void* drv;
+  void* ctx;
+  void* bsAddr[NUM_BS];
   int bsNext;
   uint32_t maxW, maxH;
   VP9Parser parser;
@@ -69,7 +76,7 @@ struct VcnVP9 {
   uint8_t *seq, *frame, *bsinfo;
   char err[256];
   VcnVP9OutputFn out;
-  void *outCtx;
+  void* outCtx;
   int64_t tag;
   CVPixelBufferPoolRef pool;
   uint32_t poolW, poolH;
@@ -78,9 +85,9 @@ struct VcnVP9 {
 
 #define FN(name) ((AVD_##name##_fn)d->accel->fn[AVD_FN_##name])
 
-// Every offset below was read from the 26.7.2 database, whose decoder code matches 26.7.1. 15.8.2 still
-// has to be compared before it goes in this list.
-static const char *const kValidatedDrivers[] = {
+// Every offset below was read from the 26.7.2 database, whose decoder code
+// matches 26.7.1. 15.8.2 still has to be compared before it goes in this list.
+static const char* const kValidatedDrivers[] = {
     "8D3BA61E7BC73BDFADB3A7866360B6DE",  // macOS 26.7.1 (25G241)
     "1181E2CA31B33DF090E23AE70552D753",  // macOS 26.7.2 (25G332)
 };
@@ -88,11 +95,14 @@ static const char *const kValidatedDrivers[] = {
 static bool driver_uuid(char out[33]) {
   for (uint32_t i = 0; i < _dyld_image_count(); i++) {
     if (!strstr(_dyld_get_image_name(i), "AMDRadeonVADriver2")) continue;
-    const struct mach_header_64 *h = (const void *)_dyld_get_image_header(i);
-    const struct load_command *lc = (const void *)(h + 1);
-    for (uint32_t k = 0; k < h->ncmds; k++, lc = (const void *)((const char *)lc + lc->cmdsize))
+    const struct mach_header_64* h = (const void*)_dyld_get_image_header(i);
+    const struct load_command* lc = (const void*)(h + 1);
+    for (uint32_t k = 0; k < h->ncmds;
+         k++, lc = (const void*)((const char*)lc + lc->cmdsize))
       if (lc->cmd == LC_UUID) {
-        for (int j = 0; j < 16; j++) sprintf(out + 2 * j, "%02X", ((const struct uuid_command *)lc)->uuid[j]);
+        for (int j = 0; j < 16; j++)
+          snprintf(out + 2 * j, 3, "%02X",
+                   ((const struct uuid_command*)lc)->uuid[j]);
         return true;
       }
   }
@@ -110,8 +120,8 @@ static bool being_traced(void) {
 
 // ---------------------------------------------------------------------------------------------------
 // Driver object layout (DecodeDataProcessor and friends), from the database.
-#define U32(p, off) (*(uint32_t *)((uint8_t *)(p) + (off)))
-#define PTR(p, off) (*(uint8_t **)((uint8_t *)(p) + (off)))
+#define U32(p, off) (*(uint32_t*)((uint8_t*)(p) + (off)))
+#define PTR(p, off) (*(uint8_t**)((uint8_t*)(p) + (off)))
 #define PROC_DECODER(proc) PTR(proc, 16)
 #define PROC_VACONTEXT(proc) PTR(proc, 24)
 #define PROC_FEEDBACK(proc) U32(proc, 32)
@@ -119,8 +129,8 @@ static bool being_traced(void) {
 #define DEC_DATA(dec) PTR(dec, 88)
 #define DEC_WIDTH(dec) U32(dec, 124)
 #define DEC_HEIGHT(dec) U32(dec, 128)
-#define DATA_REALLOC(data) (*((uint8_t *)(data) + 12))
-#define DATA_TUPLE(data) ((uint8_t *)(data) + 16)
+#define DATA_REALLOC(data) (*((uint8_t*)(data) + 12))
+#define DATA_TUPLE(data) ((uint8_t*)(data) + 16)
 #define DATA_DPB_SIZE(data) U32(data, 48)
 #define DATA_DPB_TEX(data) PTR(data, 56)
 #define DATA_MSG_TEX(data) PTR(data, 8 * (uint64_t)U32(data, 216) + 152)
@@ -150,7 +160,14 @@ static bool being_traced(void) {
 #define BI_SESSION_ON 176
 #define BI_SESSION 184
 // Virtual slots of AvdVcnAv1DecDataProcessor, in pointers.
-enum { VT_CREATE_SESSION = 2, VT_DPB_SIZE = 8, VT_CTX_SIZE = 9, VT_INIT_CTX = 12, VT_SET_MESSAGE = 14, VT_SLOTS = 16 };
+enum {
+  VT_CREATE_SESSION = 2,
+  VT_DPB_SIZE = 8,
+  VT_CTX_SIZE = 9,
+  VT_INIT_CTX = 12,
+  VT_SET_MESSAGE = 14,
+  VT_SLOTS = 16
+};
 #define FACTORY_CREATE_PROCESSOR 4  // VAFactory::createDecodeDataProcessor
 #define FACTORY_SLOTS 32
 #define AV1_PROCESSOR_TYPE 6
@@ -160,71 +177,94 @@ static uint32_t al(uint32_t v, uint32_t a) { return (v + a - 1) & ~(a - 1); }
 // Mesa's alignment for VP9 on VCN 2 and later.
 static uint32_t dpb_alignment(uint32_t width) { return width <= 32 ? 32 : 64; }
 
-static int g_session_is_vp9;  // process wide on purpose: only the dry run ever sets it to 0
-static void *g_vt[VT_SLOTS + 2];
-static void **g_orig;
+static int g_session_is_vp9;  // process wide on purpose: only the dry run ever
+                              // sets it to 0
+static void* g_vt[VT_SLOTS + 2];
+static void** g_orig;
 static __thread int t_creating;
 
-// The dry run script breaks here. It checks that its submission trap is armed before anything can go out.
-__attribute__((noinline)) void vcnvp9_dryrun_checkpoint(int phase) { __asm__ volatile("" ::"r"(phase) : "memory"); }
+// The dry run script breaks here. It checks that its submission trap is armed
+// before anything can go out.
+__attribute__((noinline)) void vcnvp9_dryrun_checkpoint(int phase) {
+  __asm__ volatile("" ::"r"(phase) : "memory");
+}
 // And here, to read the create message before it is submitted.
-__attribute__((noinline)) void vcnvp9_session_message(const void *msg) { __asm__ volatile("" ::"r"(msg) : "memory"); }
+__attribute__((noinline)) void vcnvp9_session_message(const void* msg) {
+  __asm__ volatile("" ::"r"(msg) : "memory");
+}
 // And here, to find the decode message that hook_set_message just built.
-__attribute__((noinline)) void vcnvp9_message_built(const void *data) { __asm__ volatile("" ::"r"(data) : "memory"); }
+__attribute__((noinline)) void vcnvp9_message_built(const void* data) {
+  __asm__ volatile("" ::"r"(data) : "memory");
+}
 
-static int hook_create_session(uint8_t *proc, void *bi) {
-  int r = ((int (*)(void *, void *))g_orig[VT_CREATE_SESSION])(proc, bi);
-  uint8_t *msg = DATA_MSG(DEC_DATA(PROC_DECODER(proc)));
+static int hook_create_session(uint8_t* proc, void* bi) {
+  int r = ((int (*)(void*, void*))g_orig[VT_CREATE_SESSION])(proc, bi);
+  uint8_t* msg = DATA_MSG(DEC_DATA(PROC_DECODER(proc)));
   if (!r && g_session_is_vp9) U32(msg, 40) = VCN_CODEC_VP9;
   vcnvp9_session_message(msg);
   return r;
 }
 
-// Mesa's number for VP9 on VCN 2 and later: always 8K sized, 9 pictures, half as much again at 10 bit.
-// Being fixed, it never has to be reallocated when the stream changes size, which would lose the references.
-static uint32_t hook_dpb_size(uint8_t *proc) {
+// Mesa's number for VP9 on VCN 2 and later: always 8K sized, 9 pictures, half
+// as much again at 10 bit. Being fixed, it never has to be reallocated when the
+// stream changes size, which would lose the references.
+static uint32_t hook_dpb_size(uint8_t* proc) {
   uint32_t size = 8192 * 4320 * 3 / 2 * 9;
   if (PROC_DEPTH(proc) == 10) size = size * 3 / 2;
   return size;
 }
 // Mesa's calc_ctx_size_vp9 for VCN 2 and later.
-static uint32_t hook_ctx_size(uint8_t *proc) {
-  uint32_t size = 2304 * 5 + 32 * 2 * 128 * 68 + 9 * 64 * 2 * 128 * 68 + 8 * 2 * 2 * 8192;
+static uint32_t hook_ctx_size(uint8_t* proc) {
+  uint32_t size =
+      2304 * 5 + 32 * 2 * 128 * 68 + 9 * 64 * 2 * 128 * 68 + 8 * 2 * 2 * 8192;
   if (PROC_DEPTH(proc) == 10) size += 8 * 2 * 4096;
   return size;
 }
 
-// Mesa's vcn_init_session_buf: the first 2304 bytes of the context are the default probabilities, and
-// the firmware derives the four frame contexts from them.
-static void hook_init_ctx(uint8_t *proc) {
-  uint8_t *data = DEC_DATA(PROC_DECODER(proc));
-  uint8_t *ctx = TEX_CPU(DATA_CTX_TEX(data));
+// Mesa's vcn_init_session_buf: the first 2304 bytes of the context are the
+// default probabilities, and the firmware derives the four frame contexts from
+// them.
+static void hook_init_ctx(uint8_t* proc) {
+  uint8_t* data = DEC_DATA(PROC_DECODER(proc));
+  uint8_t* ctx = TEX_CPU(DATA_CTX_TEX(data));
   memset(ctx, 0, DATA_CTX_SIZE(data));
-  VcnVP9Probs *p = (VcnVP9Probs *)ctx;
-  memcpy(p->coef_probs[0], default_coef_probs_4x4, sizeof(default_coef_probs_4x4));
-  memcpy(p->coef_probs[1], default_coef_probs_8x8, sizeof(default_coef_probs_8x8));
-  memcpy(p->coef_probs[2], default_coef_probs_16x16, sizeof(default_coef_probs_16x16));
-  memcpy(p->coef_probs[3], default_coef_probs_32x32, sizeof(default_coef_probs_32x32));
+  VcnVP9Probs* p = (VcnVP9Probs*)ctx;
+  memcpy(p->coef_probs[0], default_coef_probs_4x4,
+         sizeof(default_coef_probs_4x4));
+  memcpy(p->coef_probs[1], default_coef_probs_8x8,
+         sizeof(default_coef_probs_8x8));
+  memcpy(p->coef_probs[2], default_coef_probs_16x16,
+         sizeof(default_coef_probs_16x16));
+  memcpy(p->coef_probs[3], default_coef_probs_32x32,
+         sizeof(default_coef_probs_32x32));
   memcpy(p->y_mode_prob, default_if_y_probs, sizeof(default_if_y_probs));
   memcpy(p->uv_mode_prob, default_if_uv_probs, sizeof(default_if_uv_probs));
-  memcpy(p->single_ref_prob, default_single_ref_p, sizeof(default_single_ref_p));
-  memcpy(p->switchable_interp_prob, default_switchable_interp_prob, sizeof(default_switchable_interp_prob));
-  memcpy(p->partition_prob, default_partition_probs, sizeof(default_partition_probs));
-  memcpy(p->inter_mode_probs, default_inter_mode_probs, sizeof(default_inter_mode_probs));
+  memcpy(p->single_ref_prob, default_single_ref_p,
+         sizeof(default_single_ref_p));
+  memcpy(p->switchable_interp_prob, default_switchable_interp_prob,
+         sizeof(default_switchable_interp_prob));
+  memcpy(p->partition_prob, default_partition_probs,
+         sizeof(default_partition_probs));
+  memcpy(p->inter_mode_probs, default_inter_mode_probs,
+         sizeof(default_inter_mode_probs));
   memcpy(p->mbskip_probs, default_skip_probs, sizeof(default_skip_probs));
-  memcpy(p->intra_inter_prob, default_intra_inter_p, sizeof(default_intra_inter_p));
-  memcpy(p->comp_inter_prob, default_comp_inter_p, sizeof(default_comp_inter_p));
+  memcpy(p->intra_inter_prob, default_intra_inter_p,
+         sizeof(default_intra_inter_p));
+  memcpy(p->comp_inter_prob, default_comp_inter_p,
+         sizeof(default_comp_inter_p));
   memcpy(p->comp_ref_prob, default_comp_ref_p, sizeof(default_comp_ref_p));
-  memcpy(p->tx_probs_32x32, default_tx_probs_32x32, sizeof(default_tx_probs_32x32));
-  memcpy(p->tx_probs_16x16, default_tx_probs_16x16, sizeof(default_tx_probs_16x16));
+  memcpy(p->tx_probs_32x32, default_tx_probs_32x32,
+         sizeof(default_tx_probs_32x32));
+  memcpy(p->tx_probs_16x16, default_tx_probs_16x16,
+         sizeof(default_tx_probs_16x16));
   memcpy(p->tx_probs_8x8, default_tx_probs_8x8, sizeof(default_tx_probs_8x8));
   memcpy(p->mv_joints, default_nmv_joints, sizeof(default_nmv_joints));
   memcpy(p->mv_comps, default_nmv_components, sizeof(default_nmv_components));
 }
 
-static void fill_vp9_message(VcnMsgVP9 *m, const VP9Params *prm) {
-  const VP9Parser *p = prm->vp9;
-  const VP9Frame *h = &p->fh;
+static void fill_vp9_message(VcnMsgVP9* m, const VP9Params* prm) {
+  const VP9Parser* p = prm->vp9;
+  const VP9Frame* h = &p->fh;
   memset(m, 0, sizeof(*m));
   uint32_t fl = 0;
   if (h->frame_type) fl |= VP9_HDR_FRAME_TYPE;
@@ -240,7 +280,8 @@ static void fill_vp9_message(VcnMsgVP9 *m, const VP9Params *prm) {
   if (h->lf_delta_enabled) fl |= VP9_HDR_LF_DELTA_ENABLED;
   if (h->lf_delta_update) fl |= VP9_HDR_LF_DELTA_UPDATE;
   if (h->use_prev_frame_mvs) fl |= VP9_HDR_USE_PREV_MVS;
-  fl |= VP9_HDR_USE_UNCOMPRESSED;  // what Mesa's VA path sends: whole frame in the bitstream buffer
+  fl |= VP9_HDR_USE_UNCOMPRESSED;  // what Mesa's VA path sends: whole frame in
+                                   // the bitstream buffer
   m->frame_header_flags = fl;
   m->frame_context_idx = (uint8_t)h->frame_context_idx;
   m->reset_frame_context = (uint8_t)h->reset_frame_context;
@@ -256,25 +297,28 @@ static void fill_vp9_message(VcnMsgVP9 *m, const VP9Params *prm) {
   m->log2_tile_cols = (uint8_t)h->log2_tile_cols;
   m->log2_tile_rows = (uint8_t)h->log2_tile_rows;
   m->chroma_format = 1;
-  m->bit_depth_luma_minus8 = m->bit_depth_chroma_minus8 = (uint8_t)(h->bit_depth - 8);
+  m->bit_depth_luma_minus8 = m->bit_depth_chroma_minus8 =
+      (uint8_t)(h->bit_depth - 8);
   if (h->bit_depth > 8) m->p010_mode = m->msb_mode = 1;
   m->compressed_header_size = h->compressed_header_size;
   m->uncompressed_header_size = h->uncompressed_header_size;
-  for (int i = 0; i < 8; i++) m->ref_frame_map[i] = (uint8_t)prm->ref_frame_map[i];
+  for (int i = 0; i < 8; i++)
+    m->ref_frame_map[i] = (uint8_t)prm->ref_frame_map[i];
   for (int i = 0; i < 3; i++) {
     m->frame_refs[i] = (uint8_t)prm->frame_refs[i];
     m->ref_frame_sign_bias[i] = (uint8_t)h->sign_bias[i];
   }
 }
 
-static void fill_segments(uint8_t *it, const VP9Parser *p) {
+static void fill_segments(uint8_t* it, const VP9Parser* p) {
   memset(it, 0, VCN_VP9_PROBS_DATA_SIZE + 256);
   if (!p->fh.seg_enabled) return;
-  VcnVP9Seg *s = (VcnVP9Seg *)(it + VCN_VP9_PROBS_DATA_SIZE);
+  VcnVP9Seg* s = (VcnVP9Seg*)(it + VCN_VP9_PROBS_DATA_SIZE);
   for (int i = 0; i < 8; i++) {
-    const int16_t *f = p->seg_feature_data[i];
-    s->feature_data[i] = ((uint32_t)f[0] & 0xffff) | (((uint32_t)f[1] & 0xff) << 16) | (((uint32_t)f[2] & 0xf) << 24) |
-                         (((uint32_t)f[3] & 0xf) << 28);
+    const int16_t* f = p->seg_feature_data[i];
+    s->feature_data[i] =
+        ((uint32_t)f[0] & 0xffff) | (((uint32_t)f[1] & 0xff) << 16) |
+        (((uint32_t)f[2] & 0xf) << 24) | (((uint32_t)f[3] & 0xf) << 28);
     s->feature_mask[i] = p->seg_feature_mask[i];
   }
   memcpy(s->tree_probs, p->seg_tree_probs, 7);
@@ -282,17 +326,23 @@ static void fill_segments(uint8_t *it, const VP9Parser *p) {
   s->abs_delta = (uint8_t)p->seg_abs_delta;
 }
 
-// Replaces AvdVcnAv1DecDataProcessor::SetDecodeMessageFields. Same layout the driver sends for AV1 (four
-// index entries, the decode message filled the same way) with VP9's codec message in AV1's place.
-static int hook_set_message(uint8_t *proc, const VP9Params *prm, uint8_t *target, uint8_t *bi, uint32_t a4, uint32_t a5) {
-  (void)a4; (void)a5;
-  const VP9Frame *h = &prm->vp9->fh;
-  uint8_t *dec = PROC_DECODER(proc);
-  uint8_t *data = DEC_DATA(dec);
-  uint8_t *hw = HWCONFIG(PROC_VACONTEXT(proc));
+// Replaces AvdVcnAv1DecDataProcessor::SetDecodeMessageFields. Same layout the
+// driver sends for AV1 (four index entries, the decode message filled the same
+// way) with VP9's codec message in AV1's place.
+static int hook_set_message(uint8_t* proc, const VP9Params* prm,
+                            uint8_t* target, uint8_t* bi, uint32_t a4,
+                            uint32_t a5) {
+  (void)a4;
+  (void)a5;
+  const VP9Frame* h = &prm->vp9->fh;
+  uint8_t* dec = PROC_DECODER(proc);
+  uint8_t* data = DEC_DATA(dec);
+  uint8_t* hw = HWCONFIG(PROC_VACONTEXT(proc));
   DATA_REALLOC(data) = 0;
   PROC_DEPTH(proc) = (uint32_t)h->bit_depth;
-  uint32_t tuple[6] = {(uint32_t)h->profile, 0, DEC_WIDTH(dec), DEC_HEIGHT(dec), (uint32_t)h->bit_depth, 0};
+  uint32_t tuple[6] = {(uint32_t)h->profile,   0,
+                       DEC_WIDTH(dec),         DEC_HEIGHT(dec),
+                       (uint32_t)h->bit_depth, 0};
   if (memcmp(tuple, DATA_TUPLE(data), sizeof(tuple))) {
     uint32_t dpb = hook_dpb_size(proc), ctx = hook_ctx_size(proc);
     if (dpb > DATA_DPB_SIZE(data) || ctx > DATA_CTX_SIZE(data)) {
@@ -302,12 +352,15 @@ static int hook_set_message(uint8_t *proc, const VP9Params *prm, uint8_t *target
     }
     memcpy(DATA_TUPLE(data), tuple, sizeof(tuple));
   }
-  uint8_t *msg = DATA_MSG(data);
-  const uint32_t decode_off = 88, codec_off = decode_off + 188, codec_size = sizeof(VcnMsgVP9);
-  const uint32_t drm_off = codec_off + al(codec_size, 4), zero_off = drm_off + 68, end = zero_off + 168;
+  uint8_t* msg = DATA_MSG(data);
+  const uint32_t decode_off = 88, codec_off = decode_off + 188,
+                 codec_size = sizeof(VcnMsgVP9);
+  const uint32_t drm_off = codec_off + al(codec_size, 4),
+                 zero_off = drm_off + 68, end = zero_off + 168;
   memset(msg, 0, end + 16);
   U32(msg, 0) = 40;
-  U32(msg, 4) = end + 16;  // the driver's AV1 total also has these 16 extra bytes
+  U32(msg, 4) =
+      end + 16;  // the driver's AV1 total also has these 16 extra bytes
   U32(msg, 8) = 4;
   U32(msg, 12) = 1;
   U32(msg, 16) = (uint32_t)(uintptr_t)data;
@@ -319,8 +372,9 @@ static int hook_set_message(uint8_t *proc, const VP9Params *prm, uint8_t *target
   for (int i = 0; i < 4; i++)
     for (int j = 0; j < 3; j++) U32(msg, 24 + 16 * i + 4 * j) = index[i][j];
 
-  uint8_t *m = msg + decode_off;
-  uint32_t pitch = TEX_PITCH(target), bpe = TEX_BPE(target), texh = TEX_HEIGHT(target);
+  uint8_t* m = msg + decode_off;
+  uint32_t pitch = TEX_PITCH(target), bpe = TEX_BPE(target),
+           texh = TEX_HEIGHT(target);
   uint32_t w = DEC_WIDTH(dec), hh = DEC_HEIGHT(dec), a = dpb_alignment(w);
   U32(m, 0) = VCN_CODEC_VP9;
   U32(m, 8) = w;
@@ -340,56 +394,62 @@ static int hook_set_message(uint8_t *proc, const VP9Params *prm, uint8_t *target
   U32(m, 164) = al(w / 2, a);
 
   // SetupVcnDRMCommand with no protected content.
-  if (U32(hw, 144) & 0x80000) U32(msg + drm_off, 56) = VCN_BYPASS_DRM_CNTL;
-  else U32(msg + drm_off, 52) = VCN_BYPASS_DRM_CMD;
+  if (U32(hw, 144) & 0x80000)
+    U32(msg + drm_off, 56) = VCN_BYPASS_DRM_CNTL;
+  else
+    U32(msg + drm_off, 52) = VCN_BYPASS_DRM_CMD;
 
-  fill_vp9_message((VcnMsgVP9 *)(msg + codec_off), prm);
+  fill_vp9_message((VcnMsgVP9*)(msg + codec_off), prm);
   fill_segments(DATA_IT(data), prm->vp9);
 
   U32(bi, BI_MSG_ON) = 1;
-  *(uint8_t **)(bi + BI_MSG) = DATA_MSG_TEX(data);
+  *(uint8_t**)(bi + BI_MSG) = DATA_MSG_TEX(data);
   U32(bi, BI_DPB_ON) = 1;
-  *(uint8_t **)(bi + BI_DPB) = DATA_DPB_TEX(data);
+  *(uint8_t**)(bi + BI_DPB) = DATA_DPB_TEX(data);
   U32(bi, BI_TARGET_ON) = 1;
-  *(uint8_t **)(bi + BI_TARGET) = target;
+  *(uint8_t**)(bi + BI_TARGET) = target;
   U32(bi, BI_TARGET_OFF) = 0;
   U32(bi, BI_IT_ON) = 1;
-  *(uint8_t **)(bi + BI_IT) = DATA_IT_TEX(data);
+  *(uint8_t**)(bi + BI_IT) = DATA_IT_TEX(data);
   U32(bi, BI_CTX_ON) = 1;
-  *(uint8_t **)(bi + BI_CTX) = DATA_CTX_TEX(data);
-  if (*((int8_t *)hw + 149) < 0) {
+  *(uint8_t**)(bi + BI_CTX) = DATA_CTX_TEX(data);
+  if (*((int8_t*)hw + 149) < 0) {
     U32(bi, BI_SESSION_ON) = 1;
-    *(uint8_t **)(bi + BI_SESSION) = DATA_SESSION_TEX(data);
+    *(uint8_t**)(bi + BI_SESSION) = DATA_SESSION_TEX(data);
   }
-  DBG("message: hw flags %08x session_flag=%d session_tex=%p dpb=%u ctx=%u\n", U32(hw, 148), *((int8_t *)hw + 149) < 0, DATA_SESSION_TEX(data), DATA_DPB_SIZE(data), DATA_CTX_SIZE(data));
+  DBG("message: hw flags %08x session_flag=%d session_tex=%p dpb=%u ctx=%u\n",
+      U32(hw, 148), *((int8_t*)hw + 149) < 0, DATA_SESSION_TEX(data),
+      DATA_DPB_SIZE(data), DATA_CTX_SIZE(data));
   vcnvp9_message_built(data);
   return 0;
 }
 
-static void **g_class_vt;
+static void** g_class_vt;
 static void init_vt(void) {
   g_orig = g_class_vt;
   memcpy(g_vt, g_class_vt - 2, sizeof(g_vt));
-  void **vt = &g_vt[2];
-  vt[VT_CREATE_SESSION] = (void *)hook_create_session;
-  vt[VT_DPB_SIZE] = (void *)hook_dpb_size;
-  vt[VT_CTX_SIZE] = (void *)hook_ctx_size;
-  vt[VT_INIT_CTX] = (void *)hook_init_ctx;
-  vt[VT_SET_MESSAGE] = (void *)hook_set_message;
+  void** vt = &g_vt[2];
+  vt[VT_CREATE_SESSION] = (void*)hook_create_session;
+  vt[VT_DPB_SIZE] = (void*)hook_dpb_size;
+  vt[VT_CTX_SIZE] = (void*)hook_ctx_size;
+  vt[VT_INIT_CTX] = (void*)hook_init_ctx;
+  vt[VT_SET_MESSAGE] = (void*)hook_set_message;
 }
-// Wraps the factory's createDecodeDataProcessor: the driver creates the processor and submits the create
-// message inside one call, so this is the only moment to swap the vtable pointer on that one object.
-// Other threads may pass through here while the factory is wrapped, and they get the plain object.
-static void *(*g_orig_create_processor)(void *, int, void *);
-static void *hook_create_processor(void *factory, int type, void *decoder) {
-  void **proc = g_orig_create_processor(factory, type, decoder);
+// Wraps the factory's createDecodeDataProcessor: the driver creates the
+// processor and submits the create message inside one call, so this is the only
+// moment to swap the vtable pointer on that one object. Other threads may pass
+// through here while the factory is wrapped, and they get the plain object.
+static void* (*g_orig_create_processor)(void*, int, void*);
+static void* hook_create_processor(void* factory, int type, void* decoder) {
+  void** proc = g_orig_create_processor(factory, type, decoder);
   if (proc && type == AV1_PROCESSOR_TYPE && t_creating) {
-    void **vt = *(void ***)proc;
+    void** vt = *(void***)proc;
     if (!g_class_vt) g_class_vt = vt;
-    if (vt != g_class_vt) abort();  // something else where AV1's class should be: never continue
+    if (vt != g_class_vt)
+      abort();  // something else where AV1's class should be: never continue
     static pthread_once_t once = PTHREAD_ONCE_INIT;
     pthread_once(&once, init_vt);
-    *proc = (void *)&g_vt[2];
+    *proc = (void*)&g_vt[2];
   }
   return proc;
 }
@@ -397,24 +457,40 @@ static void *hook_create_processor(void *factory, int type, void *decoder) {
 
 static io_service_t find_accelerator(void) {
   io_iterator_t it;
-  if (IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &it)) return 0;
+  if (IOServiceGetMatchingServices(kIOMainPortDefault,
+                                   IOServiceMatching("IOAccelerator"), &it))
+    return 0;
   io_service_t s, found = 0;
   while ((s = IOIteratorNext(it))) {
-    CFTypeRef codec = IORegistryEntryCreateCFProperty(s, CFSTR("IOGVACodec"), NULL, 0);
-    if (codec) { CFRelease(codec); found = s; break; }
+    CFTypeRef codec =
+        IORegistryEntryCreateCFProperty(s, CFSTR("IOGVACodec"), NULL, 0);
+    if (codec) {
+      CFRelease(codec);
+      found = s;
+      break;
+    }
     IOObjectRelease(s);
   }
   IOObjectRelease(it);
   return found;
 }
 
-static CFNumberRef cfnum(long long v) { return CFNumberCreate(NULL, kCFNumberLongLongType, &v); }
-CFDictionaryRef vcnvp9_copy_pixel_buffer_attributes(uint32_t w, uint32_t h, bool ten) {
-  CFMutableDictionaryRef a = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-  CFMutableDictionaryRef io = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+static CFNumberRef cfnum(long long v) {
+  return CFNumberCreate(NULL, kCFNumberLongLongType, &v);
+}
+CFDictionaryRef vcnvp9_copy_pixel_buffer_attributes(uint32_t w, uint32_t h,
+                                                    bool ten) {
+  CFMutableDictionaryRef a =
+      CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
+                                &kCFTypeDictionaryValueCallBacks);
+  CFMutableDictionaryRef io =
+      CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
+                                &kCFTypeDictionaryValueCallBacks);
   CFNumberRef n;
 #define PUT(k, v) (n = cfnum(v), CFDictionarySetValue(a, k, n), CFRelease(n))
-  PUT(kCVPixelBufferPixelFormatTypeKey, ten ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
+  PUT(kCVPixelBufferPixelFormatTypeKey,
+      ten ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+          : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
   PUT(kCVPixelBufferWidthKey, w);
   PUT(kCVPixelBufferHeightKey, h);
   PUT(kCVPixelBufferBytesPerRowAlignmentKey, 256);
@@ -427,7 +503,8 @@ CFDictionaryRef vcnvp9_copy_pixel_buffer_attributes(uint32_t w, uint32_t h, bool
   return a;
 }
 
-static CVPixelBufferRef new_target(VcnVP9 *d, uint32_t w, uint32_t h, bool ten) {
+static CVPixelBufferRef new_target(VcnVP9* d, uint32_t w, uint32_t h,
+                                   bool ten) {
   if (d->pool && (d->poolW != w || d->poolH != h || d->poolTen != ten)) {
     CVPixelBufferPoolRelease(d->pool);
     d->pool = NULL;
@@ -436,76 +513,120 @@ static CVPixelBufferRef new_target(VcnVP9 *d, uint32_t w, uint32_t h, bool ten) 
     CFDictionaryRef a = vcnvp9_copy_pixel_buffer_attributes(w, h, ten);
     CVReturn r = CVPixelBufferPoolCreate(NULL, NULL, a, &d->pool);
     CFRelease(a);
-    if (r) { d->pool = NULL; return NULL; }
-    d->poolW = w; d->poolH = h; d->poolTen = ten;
+    if (r) {
+      d->pool = NULL;
+      return NULL;
+    }
+    d->poolW = w;
+    d->poolH = h;
+    d->poolTen = ten;
   }
   CVPixelBufferRef pb = NULL;
   if (CVPixelBufferPoolCreatePixelBuffer(NULL, d->pool, &pb)) return NULL;
   return pb;
 }
 
-VcnVP9 *vcnvp9_create(uint32_t maxWidth, uint32_t maxHeight, char *err, size_t errLen) {
-#define FAIL(...) do { snprintf(err, errLen, __VA_ARGS__); vcnvp9_destroy(d); return NULL; } while (0)
-  VcnVP9 *d = calloc(1, sizeof(*d));
-  d->maxW = maxWidth; d->maxH = maxHeight;
+VcnVP9* vcnvp9_create(uint32_t maxWidth, uint32_t maxHeight, char* err,
+                      size_t errLen) {
+#define FAIL(...)                                          \
+  do {                                                     \
+    if (err && errLen) snprintf(err, errLen, __VA_ARGS__); \
+    vcnvp9_destroy(d);                                     \
+    return NULL;                                           \
+  } while (0)
+  VcnVP9* d = calloc(1, sizeof(*d));
+  if (!d) {
+    if (err && errLen) snprintf(err, errLen, "out of memory");
+    return NULL;
+  }
+  d->maxW = maxWidth;
+  d->maxH = maxHeight;
   vp9_parser_init(&d->parser);
   d->seq = calloc(1, SEQ_BYTES);
   d->frame = calloc(1, FRAME_BYTES);
   d->bsinfo = calloc(1, BSINFO_BYTES);
-  // No path to the GPU unless asked for: either under the dry run's debugger, which stops the submission,
-  // or with the explicit switch. VCNVP9_SESSION=av1 pairs an AV1 session with VP9 messages, so it must
-  // never run without the debugger.
-  const char *sess = vcnvp9_gpu_armed ? "vp9" : getenv("VCNVP9_SESSION");
-  const char *arm = getenv("VCNVP9_ALLOW_GPU");
-  bool traced = being_traced(), armed = vcnvp9_gpu_armed || (arm && !strcmp(arm, "yes-i-know-it-can-hang"));
-  if (!sess || (strcmp(sess, "vp9") && strcmp(sess, "av1"))) FAIL("set VCNVP9_SESSION=vp9 or av1");
-  if (!traced && !armed) FAIL("GPU submission disabled (set VCNVP9_ALLOW_GPU or use the dry run)");
-  if (!strcmp(sess, "av1") && !traced) FAIL("VCNVP9_SESSION=av1 is only for the dry run");
+  if (!d->seq || !d->frame || !d->bsinfo) FAIL("out of memory");
+  // No path to the GPU unless asked for: either under the dry run's debugger,
+  // which stops the submission, or with the explicit switch. VCNVP9_SESSION=av1
+  // pairs an AV1 session with VP9 messages, so it must never run without the
+  // debugger.
+  const char* sess = vcnvp9_gpu_armed ? "vp9" : getenv("VCNVP9_SESSION");
+  const char* arm = getenv("VCNVP9_ALLOW_GPU");
+  bool traced = being_traced(),
+       armed =
+           vcnvp9_gpu_armed || (arm && !strcmp(arm, "yes-i-know-it-can-hang"));
+  if (!sess || (strcmp(sess, "vp9") && strcmp(sess, "av1")))
+    FAIL("set VCNVP9_SESSION=vp9 or av1");
+  if (!traced && !armed)
+    FAIL("GPU submission disabled (set VCNVP9_ALLOW_GPU or use the dry run)");
+  if (!strcmp(sess, "av1") && !traced)
+    FAIL("VCNVP9_SESSION=av1 is only for the dry run");
   g_session_is_vp9 = !strcmp(sess, "vp9");
-  void *lib = dlopen(AVD_DRIVER_PATH, RTLD_NOW | RTLD_LOCAL);
+  void* lib = dlopen(AVD_DRIVER_PATH, RTLD_NOW | RTLD_LOCAL);
   if (!lib) FAIL("dlopen driver: %s", dlerror());
   char uuid[33] = "unknown";
   bool validated = false;
   driver_uuid(uuid);
-  for (size_t i = 0; i < sizeof(kValidatedDrivers) / sizeof(*kValidatedDrivers); i++)
+  for (size_t i = 0; i < sizeof(kValidatedDrivers) / sizeof(*kValidatedDrivers);
+       i++)
     if (!strcmp(uuid, kValidatedDrivers[i])) validated = true;
-  if (!validated) FAIL("AMDRadeonVADriver2 build %s not validated for VP9", uuid);
-  AVD_CreateAVDAccelerator_fn create = (AVD_CreateAVDAccelerator_fn)dlsym(lib, "AVD_CreateAVDAccelerator");
+  if (!validated)
+    FAIL("AMDRadeonVADriver2 build %s not validated for VP9", uuid);
+  AVD_CreateAVDAccelerator_fn create =
+      (AVD_CreateAVDAccelerator_fn)dlsym(lib, "AVD_CreateAVDAccelerator");
   if (!create) FAIL("no AVD_CreateAVDAccelerator");
   io_service_t svc = find_accelerator();
   if (!svc) FAIL("no AMD accelerator");
   uint32_t services[8] = {svc};
-  AVD_AcceleratorCreate ac = {.index = 0, .services = services, .validMask = 0xffffffff};
+  AVD_AcceleratorCreate ac = {
+      .index = 0, .services = services, .validMask = 0xffffffff};
   uint8_t info[256] = {0};
   int r = create(&d->accel, &ac, info);
   if (r || !d->accel) FAIL("CreateAVDAccelerator %d", r);
   AVD_DriverCreate dc = {.initFlags = 0, .accel = d->accel};
   r = FN(CreateDriver)(&d->drv, &dc);
   if (r) FAIL("CreateDriver %d", r);
-  AVD_BitstreamPool pool = {.type = 0, .size = BS_SIZE, .format = 0x72617762, .one = 1, .count = NUM_BS,
-                            .addressesOut = d->bsAddr, .eight = 8, .five = 5};
+  AVD_BitstreamPool pool = {.type = 0,
+                            .size = BS_SIZE,
+                            .format = 0x72617762,
+                            .one = 1,
+                            .count = NUM_BS,
+                            .addressesOut = d->bsAddr,
+                            .eight = 8,
+                            .five = 5};
   r = FN(AllocateBitstreamBufferPool)(d->drv, &pool);
   if (r || !d->bsAddr[0]) FAIL("AllocateBitstreamBufferPool %d", r);
   AVD_ContextList list = {0};
-  void *ctxOut[2] = {0};
-  AVD_FunctionInfo *fis[1] = {&list.inlineInfo};
-  list.count = 1; list.functions = fis; list.contextsOut = ctxOut;
-  list.inlineInfo = (AVD_FunctionInfo){.kind = 1, .function = AVD_FUNC_AV1, .mode = VCN_MODE_VCN0,
-                                       .pixelRate = maxWidth * maxHeight * 60, .width = maxWidth, .height = maxHeight,
-                                       .inFormat = 0x72617762, .inFormatCount = 1, .outFormat = 0x4e563132, .outFormatCount = 1};
+  void* ctxOut[2] = {0};
+  AVD_FunctionInfo* fis[1] = {&list.inlineInfo};
+  list.count = 1;
+  list.functions = fis;
+  list.contextsOut = ctxOut;
+  list.inlineInfo = (AVD_FunctionInfo){.kind = 1,
+                                       .function = AVD_FUNC_AV1,
+                                       .mode = VCN_MODE_VCN0,
+                                       .pixelRate = maxWidth * maxHeight * 60,
+                                       .width = maxWidth,
+                                       .height = maxHeight,
+                                       .inFormat = 0x72617762,
+                                       .inFormatCount = 1,
+                                       .outFormat = 0x4e563132,
+                                       .outFormatCount = 1};
   AVD_DriverContextInit ci = {.list = &list};
-  // Swap the vtable pointer on this driver's factory, only for the length of CreateContexts.
+  // Swap the vtable pointer on this driver's factory, only for the length of
+  // CreateContexts.
   static pthread_mutex_t create_lock = PTHREAD_MUTEX_INITIALIZER;
-  uint8_t *va = PTR(d->drv, 8);
-  void ***factory = (void ***)PTR(va, 75072);
+  uint8_t* va = PTR(d->drv, 8);
+  void*** factory = (void***)PTR(va, 75072);
   if (!factory || !*factory) FAIL("no factory");
   vcnvp9_dryrun_checkpoint(1);
   pthread_mutex_lock(&create_lock);
-  void **origFactoryVt = *factory;
-  static void *factoryVt[FACTORY_SLOTS + 2];
+  void** origFactoryVt = *factory;
+  static void* factoryVt[FACTORY_SLOTS + 2];
   memcpy(factoryVt, origFactoryVt - 2, sizeof(factoryVt));
-  g_orig_create_processor = (void *(*)(void *, int, void *))origFactoryVt[FACTORY_CREATE_PROCESSOR];
-  factoryVt[2 + FACTORY_CREATE_PROCESSOR] = (void *)hook_create_processor;
+  g_orig_create_processor =
+      (void* (*)(void*, int, void*))origFactoryVt[FACTORY_CREATE_PROCESSOR];
+  factoryVt[2 + FACTORY_CREATE_PROCESSOR] = (void*)hook_create_processor;
   *factory = &factoryVt[2];
   t_creating = 1;
   r = FN(CreateContexts)(d->drv, &ci);
@@ -514,91 +635,133 @@ VcnVP9 *vcnvp9_create(uint32_t maxWidth, uint32_t maxHeight, char *err, size_t e
   pthread_mutex_unlock(&create_lock);
   if (r || !ctxOut[0]) FAIL("CreateContexts %d", r);
   d->ctx = ctxOut[0];
-  DBG("created: driver %s session=%s drv=%p ctx=%p\n", uuid, sess, d->drv, d->ctx);
+  DBG("created: driver %s session=%s drv=%p ctx=%p\n", uuid, sess, d->drv,
+      d->ctx);
   return d;
 }
 
-void vcnvp9_destroy(VcnVP9 *d) {
+void vcnvp9_destroy(VcnVP9* d) {
   if (!d) return;
-  if (d->ctx) {
-    void *ctxs[1] = {d->ctx};
+  if (d->ctx && d->drv && d->accel) {
+    void* ctxs[1] = {d->ctx};
     AVD_DriverContextDelete del = {.count = 1, .contexts = ctxs};
     FN(DeleteContexts)(d->drv, &del);
   }
-  if (d->drv) {
+  if (d->drv && d->accel) {
     FN(FreeBitstreamBufferPool)(d->drv, 0);
     FN(DeleteDriver)(d->drv);
   }
-  for (int i = 0; i < NUM_DPB; i++) if (d->dpb[i]) CVPixelBufferRelease(d->dpb[i]);
+  for (int i = 0; i < NUM_DPB; i++)
+    if (d->dpb[i]) CVPixelBufferRelease(d->dpb[i]);
   if (d->pool) CVPixelBufferPoolRelease(d->pool);
-  free(d->seq); free(d->frame); free(d->bsinfo);
+  free(d->seq);
+  free(d->frame);
+  free(d->bsinfo);
   free(d);
 }
 
-const char *vcnvp9_last_error(VcnVP9 *d) { return d->err; }
+const char* vcnvp9_last_error(VcnVP9* d) { return d ? d->err : ""; }
 
-static int alloc_dpb_slot(VcnVP9 *d) {
-  for (int i = 0; i < NUM_DPB; i++) if (d->dpbRefs[i] == 0) return i;
+static int alloc_dpb_slot(VcnVP9* d) {
+  for (int i = 0; i < NUM_DPB; i++)
+    if (d->dpbRefs[i] == 0) return i;
   return -1;
 }
-static void recount_refs(VcnVP9 *d) {
+static void recount_refs(VcnVP9* d) {
   memset(d->dpbRefs, 0, sizeof(d->dpbRefs));
   for (int i = 0; i < 8; i++) {
-    const VP9Ref *r = &d->parser.ref[i];
+    const VP9Ref* r = &d->parser.ref[i];
     if (r->valid && r->dpb_slot >= 0) d->dpbRefs[r->dpb_slot]++;
   }
 }
 
-static int submit(VcnVP9 *d, VP9Params *prm) {
+static int submit(VcnVP9* d, VP9Params* prm) {
   vcnvp9_dryrun_checkpoint(2);
-  AVD_CmdInfo cmd = {.kind = 1, .function = AVD_FUNC_AV1, .mode = VCN_MODE_VCN0, .context = d->ctx, .params = prm};
-  AVD_CmdInfo *cmds[1] = {&cmd};
+  AVD_CmdInfo cmd = {.kind = 1,
+                     .function = AVD_FUNC_AV1,
+                     .mode = VCN_MODE_VCN0,
+                     .context = d->ctx,
+                     .params = prm};
+  AVD_CmdInfo* cmds[1] = {&cmd};
   AVD_CmdList list = {.count = 1, .cmds = cmds};
-  void *refcons[1] = {0};
+  void* refcons[1] = {0};
   AVD_RefConList rl = {.count = 1, .refcons = refcons};
   int r = FN(ScheduleAVDCommands)(d->drv, &list, &rl);
-  if (r) { snprintf(d->err, sizeof(d->err), "ScheduleAVDCommands %d", r); return -1; }
+  if (r) {
+    snprintf(d->err, sizeof(d->err), "ScheduleAVDCommands %d", r);
+    return -1;
+  }
   AVD_QueryEntry qe = {.refcon = refcons[0], .pollMs = 1, .wait = 1};
   AVD_QueryList ql = {.count = 1, .entries = &qe};
   r = FN(QueryAVDCommandStatus)(d->drv, &ql);
-  if (r) { snprintf(d->err, sizeof(d->err), "QueryAVDCommandStatus %d", r); return -1; }
+  if (r) {
+    snprintf(d->err, sizeof(d->err), "QueryAVDCommandStatus %d", r);
+    return -1;
+  }
   return 0;
 }
 
-static int on_frame(void *vctx, VP9Parser *p, VP9ParseResult kind, const uint8_t *data, size_t size) {
-  VcnVP9 *d = vctx;
-  const VP9Frame *h = &p->fh;
+static int on_frame(void* vctx, VP9Parser* p, VP9ParseResult kind,
+                    const uint8_t* data, size_t size) {
+  VcnVP9* d = vctx;
+  const VP9Frame* h = &p->fh;
   if (kind == VP9_PARSE_SHOW_EXISTING) {
-    const VP9Ref *r = &p->ref[h->frame_to_show];
-    if (!r->valid || r->dpb_slot < 0 || !d->dpb[r->dpb_slot]) { snprintf(d->err, sizeof(d->err), "show_existing of a missing reference"); return -1; }
-    if (d->out) d->out(d->outCtx, d->dpb[r->dpb_slot], p, r->width, r->height, d->tag);
+    const VP9Ref* r = &p->ref[h->frame_to_show];
+    if (!r->valid || r->dpb_slot < 0 || !d->dpb[r->dpb_slot]) {
+      snprintf(d->err, sizeof(d->err), "show_existing of a missing reference");
+      return -1;
+    }
+    if (d->out)
+      d->out(d->outCtx, d->dpb[r->dpb_slot], p, r->width, r->height, d->tag);
     return 0;
   }
-  if (!vp9_frame_supported(p)) { snprintf(d->err, sizeof(d->err), "profile %d depth %d not supported", h->profile, h->bit_depth); return -1; }
+  if (!vp9_frame_supported(p)) {
+    snprintf(d->err, sizeof(d->err), "profile %d depth %d not supported",
+             h->profile, h->bit_depth);
+    return -1;
+  }
   if (h->frame_type && !h->intra_only)
     for (int i = 0; i < 3; i++)
-      if (!p->ref[h->ref_frame_idx[i]].valid) { snprintf(d->err, sizeof(d->err), "missing reference"); return -1; }
-  if (h->width > d->maxW || h->height > d->maxH) { snprintf(d->err, sizeof(d->err), "%ux%u is over the session maximum", h->width, h->height); return -1; }
-  if (size + 256 > BS_SIZE) { snprintf(d->err, sizeof(d->err), "frame too big"); return -1; }
+      if (!p->ref[h->ref_frame_idx[i]].valid) {
+        snprintf(d->err, sizeof(d->err), "missing reference");
+        return -1;
+      }
+  if (h->width > d->maxW || h->height > d->maxH) {
+    snprintf(d->err, sizeof(d->err), "%ux%u is over the session maximum",
+             h->width, h->height);
+    return -1;
+  }
+  if (size > BS_SIZE - 256) {
+    snprintf(d->err, sizeof(d->err), "frame too big");
+    return -1;
+  }
   int slot = alloc_dpb_slot(d);
-  if (slot < 0) { snprintf(d->err, sizeof(d->err), "no free DPB slot"); return -1; }
-  CVPixelBufferRef target = new_target(d, h->width, h->height, h->bit_depth > 8);
-  if (!target) { snprintf(d->err, sizeof(d->err), "no pixel buffer for %ux%u", h->width, h->height); return -1; }
+  if (slot < 0) {
+    snprintf(d->err, sizeof(d->err), "no free DPB slot");
+    return -1;
+  }
+  CVPixelBufferRef target =
+      new_target(d, h->width, h->height, h->bit_depth > 8);
+  if (!target) {
+    snprintf(d->err, sizeof(d->err), "no pixel buffer for %ux%u", h->width,
+             h->height);
+    return -1;
+  }
   if (d->dpb[slot]) CVPixelBufferRelease(d->dpb[slot]);
   d->dpb[slot] = target;
   int bi = d->bsNext;
   d->bsNext = (d->bsNext + 1) % NUM_BS;
   memcpy(d->bsAddr[bi], data, size);
-  memset((uint8_t *)d->bsAddr[bi] + size, 0, 256);
+  memset((uint8_t*)d->bsAddr[bi] + size, 0, 256);
   memset(d->bsinfo, 0, BSINFO_BYTES);
-  *(uint32_t *)(d->bsinfo + 0) = (uint32_t)bi;
-  *(uint32_t *)(d->bsinfo + 16) = al((uint32_t)size, 128);
+  *(uint32_t*)(d->bsinfo + 0) = (uint32_t)bi;
+  *(uint32_t*)(d->bsinfo + 16) = al((uint32_t)size, 128);
   memset(d->frame, 0, FRAME_BYTES);
   // What the driver's own code reads from the AV1 frame block.
-  *(uint32_t *)(d->frame + 308) = h->width - 1;
-  *(uint32_t *)(d->frame + 312) = h->width;
-  *(uint32_t *)(d->frame + 316) = h->height - 1;
-  *(uint32_t *)(d->frame + 320) = h->height;
+  *(uint32_t*)(d->frame + 308) = h->width - 1;
+  *(uint32_t*)(d->frame + 312) = h->width;
+  *(uint32_t*)(d->frame + 316) = h->height - 1;
+  *(uint32_t*)(d->frame + 320) = h->height;
   VP9Params prm;
   memset(&prm, 0, sizeof(prm));
   prm.seq = d->seq;
@@ -607,31 +770,44 @@ static int on_frame(void *vctx, VP9Parser *p, VP9ParseResult kind, const uint8_t
   prm.output = CVPixelBufferGetIOSurface(target);
   prm.bsinfo = d->bsinfo;
   prm.vp9 = p;
-  for (int i = 0; i < 8; i++) prm.ref_frame_map[i] = p->ref[i].valid && p->ref[i].dpb_slot >= 0 ? (uint32_t)p->ref[i].dpb_slot : 0x7f;
+  for (int i = 0; i < 8; i++)
+    prm.ref_frame_map[i] = p->ref[i].valid && p->ref[i].dpb_slot >= 0
+                               ? (uint32_t)p->ref[i].dpb_slot
+                               : 0x7f;
   bool intra = h->frame_type == 0 || h->intra_only;
   for (int i = 0; i < 7; i++) prm.frame_refs[i] = 0x7f;
   if (!intra)
-    for (int i = 0; i < 3; i++) prm.frame_refs[i] = (uint32_t)p->ref[h->ref_frame_idx[i]].dpb_slot;
-  DBG("frame type=%d intra=%d show=%d %ux%u depth=%d q=%d bytes=%zu slot=%d refresh=%02x\n", h->frame_type, h->intra_only, h->show_frame,
-      h->width, h->height, h->bit_depth, h->base_q_idx, size, slot, h->refresh_frame_flags);
+    for (int i = 0; i < 3; i++)
+      prm.frame_refs[i] = (uint32_t)p->ref[h->ref_frame_idx[i]].dpb_slot;
+  DBG("frame type=%d intra=%d show=%d %ux%u depth=%d q=%d bytes=%zu slot=%d "
+      "refresh=%02x\n",
+      h->frame_type, h->intra_only, h->show_frame, h->width, h->height,
+      h->bit_depth, h->base_q_idx, size, slot, h->refresh_frame_flags);
   if (submit(d, &prm)) return -1;
   vp9_frame_done(p, slot);
   recount_refs(d);
-  if (h->show_frame && d->out) d->out(d->outCtx, target, p, h->width, h->height, d->tag);
+  if (h->show_frame && d->out)
+    d->out(d->outCtx, target, p, h->width, h->height, d->tag);
   return 0;
 }
 
-int vcnvp9_decode(VcnVP9 *d, const uint8_t *chunk, size_t size, int64_t tag, VcnVP9OutputFn fn, void *ctx) {
-  d->out = fn; d->outCtx = ctx; d->tag = tag;
+int vcnvp9_decode(VcnVP9* d, const uint8_t* chunk, size_t size, int64_t tag,
+                  VcnVP9OutputFn fn, void* ctx) {
+  d->out = fn;
+  d->outCtx = ctx;
+  d->tag = tag;
   d->err[0] = 0;
   int r = vp9_parse_chunk(&d->parser, chunk, size, on_frame, d);
-  if (r && !d->err[0]) snprintf(d->err, sizeof(d->err), "%s", d->parser.err[0] ? d->parser.err : "bitstream error");
+  if (r && !d->err[0])
+    snprintf(d->err, sizeof(d->err), "%s",
+             d->parser.err[0] ? d->parser.err : "bitstream error");
   return r;
 }
 
 // Used by the dry run script: copy memory to a file from inside the process.
-__attribute__((noinline, used)) int vcnvp9_dump(const void *p, long n, const char *path) {
-  FILE *f = fopen(path, "wb");
+__attribute__((noinline, used)) int vcnvp9_dump(const void* p, long n,
+                                                const char* path) {
+  FILE* f = fopen(path, "wb");
   if (!f) return -1;
   long w = (long)fwrite(p, 1, (size_t)n, f);
   fclose(f);

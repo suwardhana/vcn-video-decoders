@@ -1,5 +1,8 @@
 // VCN decode message layouts for VP9, same layout as Mesa's ac_vcn_dec.h.
-#pragma once
+
+#ifndef VCNVP9_VP9MSG_H_
+#define VCNVP9_VP9MSG_H_
+
 #include <stdint.h>
 
 #define VCN_CODEC_VP9 0x11u
@@ -90,7 +93,8 @@ typedef struct {
   VcnVP9NmvComp mv_comps[2];
 } VcnVP9Probs;
 
-// The prob table buffer: Mesa only fills the segment part per frame, the probabilities live in the context.
+// The prob table buffer: Mesa only fills the segment part per frame, the
+// probabilities live in the context.
 #define VCN_VP9_PROBS_DATA_SIZE 2304u
 typedef struct {
   uint32_t feature_data[8];
@@ -100,5 +104,9 @@ typedef struct {
   uint8_t feature_mask[8];
 } VcnVP9Seg;
 
-_Static_assert(sizeof(VcnVP9Probs) <= VCN_VP9_PROBS_DATA_SIZE, "probability table layout");
-_Static_assert(sizeof(VcnVP9NmvComp) == 33, "default_nmv_components entry size");
+_Static_assert(sizeof(VcnVP9Probs) <= VCN_VP9_PROBS_DATA_SIZE,
+               "probability table layout");
+_Static_assert(sizeof(VcnVP9NmvComp) == 33,
+               "default_nmv_components entry size");
+
+#endif  // VCNVP9_VP9MSG_H_
