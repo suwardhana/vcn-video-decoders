@@ -1,9 +1,25 @@
-# AMD VCN Video Decoders: source
+# AMD VCN Video Decoders
 
 Hardware AV1 and VP9 decoding through VideoToolbox on AMD Navi 21 GPUs (RX 6800, 6800 XT, 6900 XT,
 6950 XT) on OpenCore hackintoshes. Safari and Chrome then decode YouTube AV1 and VP9 on the GPU.
 
 Made by [DrogaBox](https://github.com/DrogaBox) & [Izzy](https://github.com/wh0ami7).
+
+<img width="1900" height="859" alt="image" src="https://github.com/user-attachments/assets/a58ecd9d-c990-4707-aea9-8a3f5d1fe01e" />
+
+
+# Requirements
+
+AMD Navi 21 GPU: RX 6800, 6800 XT, 6900 XT or 6950 XT. Other cards are untested.
+
+OpenCore hackintosh on one of the validated builds: Sequoia 15.8.2 (24H232), Tahoe 26.7.1 (25G241) or Tahoe 26.7.2 (25G332). Other builds are blocked by default, because an unchecked driver can hang the GPU.
+
+Authenticated root disabled, to write the sealed system volume: csrutil authenticated-root disable from Recovery.
+
+AMFI open: the amfi_get_out_of_my_way=0x1 boot-arg or AMFIPass. Otherwise macOS refuses to load the decoders.
+
+To undo everything: Uninstall in the app and reboot, or sudo bless --mount / --last-sealed-snapshot and reboot.
+
 
 ## How it works
 
