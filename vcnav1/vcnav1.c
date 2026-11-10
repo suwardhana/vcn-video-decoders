@@ -353,7 +353,12 @@ static void pack_frame(VcnAV1* d) {
   F32(q, 100, h->primary_ref_frame);
   F32(q, 236, h->refresh_frame_flags);
   F32(q, 304, h->frame_width_minus_1);
-  F32(q, 308, h->frame_height_minus_1);
+  // Decode target size: getDecodeTargetArea / SetDecodeMessageFields read
+  // +308 as width-1 and +316 as height-1 (same as the VP9 path). Putting
+  // height-1 at +308 made every portrait frame wider than its surface ->
+  // blank output.
+  F32(q, 308, h->UpscaledWidth - 1);
+  F32(q, 316, h->FrameHeight - 1);
   F32(q, 312, h->FrameWidth);
   F32(q, 320, h->FrameHeight);
   F32(q, 324, h->UpscaledWidth);
